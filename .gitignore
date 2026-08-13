@@ -1,0 +1,5 @@
+# Dev-only dependency linkage (nix store symlinks) — see README "Development"
+node_modules/
+
+.DS_Store
+*.log
