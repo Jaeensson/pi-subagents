@@ -1,5 +1,8 @@
 # Dev-only dependency linkage (nix store symlinks) — see README "Development"
 node_modules/
 
+# direnv / nix-direnv cache
+.direnv/
+
 .DS_Store
 *.log
