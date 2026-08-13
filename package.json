@@ -4,6 +4,10 @@
   "private": true,
   "description": "Subagent tool for pi: delegate tasks to isolated agent processes, synchronously (wait) or asynchronously (background + collect).",
   "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
   "scripts": {
     "test": "node --test tests/core.test.mjs",
     "typecheck": "tsc --noEmit"

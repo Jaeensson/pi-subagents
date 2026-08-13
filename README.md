@@ -9,16 +9,40 @@ The parent session can either **wait** for subagents (synchronous) or keep
 
 ## Installation
 
-This repo is the source for the extension. pi auto-discovers extensions from
-`~/.pi/agent/extensions/`, so install by copying or symlinking the repo there,
-then reload pi (`/reload`):
+Install directly from the git repo as a pi package, then reload pi (`/reload`):
+
+```bash
+pi install https://github.com/Jaeensson/pi-subagents
+```
+
+While the repo is private, or if you use SSH keys, install via SSH instead:
+
+```bash
+pi install git:git@github.com:Jaeensson/pi-subagents
+```
+
+Update to the latest version:
+
+```bash
+pi update --extensions   # or: pi update --all
+# then /reload
+```
+
+Install for a single project only (`-l` writes to `.pi/settings.json`):
+
+```bash
+pi install -l https://github.com/Jaeensson/pi-subagents
+```
+
+Alternatively, for local development, copy or symlink the repo into
+`~/.pi/agent/extensions/`:
 
 ```bash
 # Option A: copy
-cp -R pi-subagent ~/.pi/agent/extensions/subagent
+cp -R pi-subagents ~/.pi/agent/extensions/subagent
 
 # Option B: symlink (single source of truth — edits in the repo take effect after /reload)
-ln -sfn "$(pwd)/pi-subagent" ~/.pi/agent/extensions/subagent
+ln -sfn "$(pwd)/pi-subagents" ~/.pi/agent/extensions/subagent
 ```
 
 Agent definitions go in `~/.pi/agent/agents/*.md` (see [Agent definitions](#agent-definitions)).
