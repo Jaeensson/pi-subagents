@@ -25,14 +25,15 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ExtensionAPI, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { type ExtensionAPI, type ExtensionContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { discoverUserAgents, formatAgentList, getUserAgentsDir } from "./agents.ts";
 import {
 	applyEventLine,
 	buildChildArgs,
 	formatCompletionNotification,
+	formatElapsed,
 	formatStatusReport,
 	formatUsageStats,
 	getFinalOutput,
@@ -66,6 +67,7 @@ interface Task {
 	task: string;
 	cwd: string;
 	status: TaskStatus;
+	startedAt: number;
 	exitCode: number;
 	messages: MessageLike[];
 	stderr: string;
@@ -85,6 +87,7 @@ interface Job {
 	status: "running" | "completed" | "failed" | "aborted";
 	errorMessage?: string;
 	tasks: Task[];
+	chainTotal?: number;
 	notifyOnComplete: boolean;
 	notified: boolean;
 	finished: boolean;
@@ -210,6 +213,7 @@ function finalizeTask(task: Task, code: number | null) {
 	task.status = code === 0 && sr !== "error" && sr !== "aborted" ? "completed" : sr === "aborted" ? "aborted" : "failed";
 	cleanupTaskTemp(task);
 	runningCount = Math.max(0, runningCount - 1);
+	updateStatusWidget();
 	fireWaiters(taskWaiters, task.id);
 
 	const job = jobs.get(task.jobId);
@@ -253,6 +257,7 @@ async function spawnTask(agent: AgentSummary, taskText: string, cwd: string, job
 		task: taskText,
 		cwd,
 		status: "running",
+		startedAt: Date.now(),
 		exitCode: -1,
 		messages: [],
 		stderr: "",
@@ -265,6 +270,7 @@ async function spawnTask(agent: AgentSummary, taskText: string, cwd: string, job
 	if (job) job.pendingSpawns++;
 	if (job) job.tasks.push(task);
 	runningCount++;
+	updateStatusWidget();
 
 	try {
 		let systemPromptFile: string | undefined;
@@ -313,12 +319,13 @@ async function spawnTask(agent: AgentSummary, taskText: string, cwd: string, job
 
 // ── Job lifecycle ────────────────────────────────────────────────────────────
 
-function createJob(mode: JobMode, notifyOnComplete: boolean, emit?: (content: string, details: ToolDetails) => void): Job {
+function createJob(mode: JobMode, notifyOnComplete: boolean, emit?: (content: string, details: ToolDetails) => void, chainTotal?: number): Job {
 	const job: Job = {
 		id: randomUUID(),
 		mode,
 		status: "running",
 		tasks: [],
+		chainTotal,
 		notifyOnComplete,
 		notified: false,
 		finished: false,
@@ -620,12 +627,125 @@ function renderTaskList(tasks: DisplayItem[], limit: number, theme: any): string
 	return text.trimEnd();
 }
 
+// ── Persistent status widget ────────────────────────────────────────────────
+//
+// A minimal widget above the editor, visible only while subagents are running:
+//
+//   ⏳ 2 subagents running
+//     ▸ scout     12s   → bash: npm test
+//     ▸ planner    4s   step 2/3  "Refactor the core loop"
+//
+// The widget factory captures the TUI so lifecycle changes (spawn/finish/kill)
+// can request re-renders; a 1s ticker keeps elapsed times live while running.
+
+const STATUS_WIDGET_KEY = "subagent-status";
+
+let uiRef: ExtensionContext["ui"] | undefined;
+let widgetTui: TUI | undefined;
+let widgetRegistered = false;
+let widgetTimer: NodeJS.Timeout | undefined;
+
+function stopWidgetTimer() {
+	if (widgetTimer) {
+		clearInterval(widgetTimer);
+		widgetTimer = undefined;
+	}
+}
+
+function requestWidgetRender() {
+	widgetTui?.requestRender();
+}
+
+/** Keep a 1s ticker alive while any task is running so elapsed times stay live. */
+function ensureWidgetTicker() {
+	if (runningCount > 0 && !widgetTimer && widgetTui) {
+		widgetTimer = setInterval(() => requestWidgetRender(), 1000);
+		widgetTimer.unref?.();
+	} else if (runningCount === 0) {
+		stopWidgetTimer();
+	}
+}
+
+function truncatePreview(s: string, max = 48): string {
+	return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/** Last activity of a running task: most recent tool call, else its latest text, else the task description. */
+function lastActivity(t: Task, theme: any): string {
+	const items = getDisplayItems(t.messages);
+	const last = items[items.length - 1];
+	if (!last) return theme.fg("dim", truncatePreview(t.task));
+	if (last.type === "toolCall") return formatToolCall(last.name, last.args, theme.fg.bind(theme));
+	const text = last.text.split("\n").find((l) => l.trim()) ?? "";
+	return theme.fg("toolOutput", truncatePreview(text));
+}
+
+/** Build the widget lines from the live registry. Returns [] when idle. */
+function runningTaskLines(theme: any, width: number): string[] {
+	const running = [...tasks.values()].filter((t) => t.status === "running");
+	if (running.length === 0) return [];
+
+	const now = Date.now();
+	const lines: string[] = [
+		theme.fg("warning", `⏳ ${running.length} subagent${running.length === 1 ? "" : "s"} running`),
+	];
+	for (const t of running) {
+		const elapsed = formatElapsed((now - t.startedAt) / 1000);
+		const job = jobs.get(t.jobId);
+		const step =
+			job?.mode === "chain" && job.chainTotal && t.step
+				? theme.fg("muted", ` step ${t.step}/${job.chainTotal}`)
+				: "";
+		lines.push(`  ${theme.fg("warning", "▸")} ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${elapsed}`)}${step}  ${lastActivity(t, theme)}`);
+	}
+	return lines.map((line) => truncateToWidth(line, width));
+}
+
+/** Register/refresh/remove the widget based on the running count. */
+function updateStatusWidget() {
+	if (!uiRef) return;
+	const running = runningCount > 0;
+	if (running && !widgetRegistered) {
+		uiRef.setWidget(STATUS_WIDGET_KEY, (tui, theme) => {
+			widgetTui = tui;
+			return {
+				render: (width) => runningTaskLines(theme, width),
+				invalidate: () => {},
+				dispose: () => {
+					widgetTui = undefined;
+					widgetRegistered = false;
+					stopWidgetTimer();
+				},
+			};
+		});
+		widgetRegistered = true;
+		ensureWidgetTicker();
+	} else if (!running && widgetRegistered) {
+		uiRef.setWidget(STATUS_WIDGET_KEY, undefined);
+		widgetRegistered = false;
+		stopWidgetTimer();
+	} else {
+		requestWidgetRender();
+		ensureWidgetTicker();
+	}
+}
+
 // ── Extension entry ──────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
 	api = pi;
 
+	pi.on("session_start", (_event, ctx) => {
+		if (!ctx.hasUI) return;
+		uiRef = ctx.ui;
+	});
+
 	pi.on("session_shutdown", async () => {
+		// Drop UI references first so task-close callbacks during teardown no-op.
+		uiRef = undefined;
+		widgetTui = undefined;
+		widgetRegistered = false;
+		stopWidgetTimer();
 		for (const t of tasks.values()) if (t.status === "running") killTask(t);
 		tasks.clear();
 		jobs.clear();
@@ -711,7 +831,7 @@ export default function (pi: ExtensionAPI) {
 
 			// ── Chain mode ──
 			if (hasChain) {
-				const job = createJob("chain", shouldNotify(wait, notifyOnComplete), emit);
+				const job = createJob("chain", shouldNotify(wait, notifyOnComplete), emit, params.chain!.length);
 				runChain(job, params.chain!, agents, params.cwd ?? ctx.cwd, wait ? signal : undefined);
 				if (!wait) {
 					return { content: [{ type: "text", text: spawnResultText(job, "chain") }], details: jobDetails(job) };

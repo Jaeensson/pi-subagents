@@ -96,6 +96,22 @@ Use subagent { chain: [{ agent: "scout", task: "Find the read tool" }, { agent: 
 - Async spawning is designed for interactive sessions — `pi -p` (print mode)
   exits when the prompt completes and kills background children.
 
+### Status widget
+
+While subagents are running, a compact widget appears above the input editor and
+updates live (1s tick):
+
+```
+⏳ 2 subagents running
+  ▸ scout     12s   → bash: npm test
+  ▸ planner    4s   step 2/3  "Refactor the core loop"
+```
+
+Each line shows the agent, elapsed time, chain step (chain mode), and the last
+activity (most recent tool call, latest output, or the task description). The
+widget covers sync and async runs alike; it disappears automatically when
+nothing is running. TUI-only — print/JSON modes are unaffected.
+
 ## Agent definitions
 
 `~/.pi/agent/agents/*.md` — markdown with YAML frontmatter and a system prompt

@@ -16,6 +16,7 @@ import {
 	DEFAULT_AGENT_SYSTEM_PROMPT,
 	formatCompletionNotification,
 	formatStatusReport,
+	formatElapsed,
 	formatTokens,
 	formatUsageStats,
 	getFinalOutput,
@@ -304,6 +305,32 @@ test("formatUsageStats joins present fields", () => {
 
 test("formatUsageStats returns empty string for empty usage", () => {
 	assert.equal(formatUsageStats({}), "");
+});
+
+// ── formatElapsed ─────────────────────────────────────────────────────────────
+
+test("formatElapsed formats sub-minute durations as seconds", () => {
+	assert.equal(formatElapsed(0), "0s");
+	assert.equal(formatElapsed(3), "3s");
+	assert.equal(formatElapsed(59), "59s");
+});
+
+test("formatElapsed formats minute-level durations and drops zero seconds", () => {
+	assert.equal(formatElapsed(60), "1m");
+	assert.equal(formatElapsed(90), "1m 30s");
+	assert.equal(formatElapsed(3599), "59m 59s");
+});
+
+test("formatElapsed formats hour-level durations and drops zero minutes", () => {
+	assert.equal(formatElapsed(3600), "1h");
+	assert.equal(formatElapsed(3661), "1h 1m");
+	assert.equal(formatElapsed(7325), "2h 2m");
+});
+
+test("formatElapsed floors partial seconds instead of rounding up", () => {
+	assert.equal(formatElapsed(1.9), "1s");
+	assert.equal(formatElapsed(59.9), "59s");
+	assert.equal(formatElapsed(61.9), "1m 1s");
 });
 
 // ── resolveAgent / default agent ─────────────────────────────────────────────
