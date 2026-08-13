@@ -31,9 +31,13 @@
             # nodejs_24 matches pi's own runtime (nodejs-24.18.0) and ships npm.
             # typescript provides tsc; @types/node is linked from the pi store
             # in the shellHook below (tsconfig uses "types": ["node"]).
+            # pi-coding-agent ships pi itself (same version as the runtime that
+            # loads the extension), so typechecking and testing work even on
+            # machines without pi pre-installed.
             packages = with pkgs; [
               nodejs_24
               typescript
+              pi-coding-agent
             ];
 
             # Auto-link pi's runtime packages into ./node_modules so
@@ -56,7 +60,18 @@
                   ln -sfn "$STORE/node_modules/@earendil-works/pi-agent-core" node_modules/@earendil-works/pi-agent-core
                   ln -sfn "$STORE/node_modules/typebox" node_modules/typebox
                   ln -sfn "$STORE/node_modules/@types/node" node_modules/@types/node
-                  echo "pi-subagent: linked node_modules -> $STORE"
+                  VERSION="$(echo "$STORE" | sed -E 's/.*pi-coding-agent-([0-9][0-9.]*).*/\1/')"
+                  echo "pi-subagent: linked node_modules -> pi $VERSION ($STORE)"
+                  # Informational: note if the system pi (the runtime that would
+                  # load the extension) differs from the linked devshell pi.
+                  SYSTEM_PI="/run/current-system/sw/bin/pi"
+                  if [ -x "$SYSTEM_PI" ]; then
+                    SYS_STORE="$(readlink -f "$SYSTEM_PI" 2>/dev/null | sed 's|/bin/pi$||')/lib/node_modules/pi-monorepo"
+                    SYS_VERSION="$(echo "$SYS_STORE" | sed -E 's/.*pi-coding-agent-([0-9][0-9.]*).*/\1/')"
+                    if [ -n "$SYS_VERSION" ] && [ "$SYS_VERSION" != "$VERSION" ]; then
+                      echo "pi-subagent: note: system pi is $SYS_VERSION; devshell links target pi $VERSION"
+                    fi
+                  fi
                 fi
               fi
             '';
