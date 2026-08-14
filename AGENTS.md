@@ -21,7 +21,9 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   TUI rendering); `agents.ts` discovers agent definitions from
   `~/.pi/agent/agents/*.md`.
 - Agent files: YAML frontmatter (`name`, `description` required; `tools`,
-  `model` optional) + markdown system prompt body.
+  `model`, `tier` optional) + markdown system prompt body. `tier` is
+  `fast | balanced | deep`, resolved via `subagent.modelTiers` in pi's
+  settings.json.
 - Subagent children run `pi --mode json -p --no-session --no-extensions
   --no-skills --no-prompt-templates`.
 

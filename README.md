@@ -123,19 +123,63 @@ name: scout
 description: Fast recon agent, read-only
 tools: read, grep, find, ls, bash
 model: claude-haiku-4-5
+tier: fast
 ---
 
 You are a scout agent. Find information quickly and report it compactly.
 ```
 
-- `name` and `description` are required; `tools` (comma-separated) and `model`
-  are optional. Omit `tools` for the full default toolset.
+- `name` and `description` are required; `tools` (comma-separated), `model`,
+  and `tier` (`fast` | `balanced` | `deep`) are optional. Omit `tools` for the
+  full default toolset.
+- If both `model` and `tier` are set, `model` wins (a concrete pin beats an
+  abstract tier). A call-time `tier` parameter beats both.
 - Omit the agent entirely when calling `subagent` — in single, parallel, or
   chain mode — to use the built-in default general-purpose agent (raw prompt
   mode).
 - More sample agents (planner, reviewer, worker) ship with pi:
   `examples/extensions/subagent/agents/` inside the pi package — copy them to
   `~/.pi/agent/agents/`.
+
+## Model tiers
+
+`tier: fast | balanced | deep` declares how much capability a task needs
+instead of which model to use. Tiers resolve to concrete models at spawn time
+through a central mapping in pi's `settings.json`:
+
+```json
+{
+  "subagent": {
+    "modelTiers": {
+      "auto": true,
+      "fast": "claude-haiku-4-5",
+      "balanced": "claude-sonnet-4-5",
+      "deep": "claude-opus-4-5"
+    }
+  }
+}
+```
+
+- Declare a tier in an agent file (`tier: deep` in frontmatter) and/or pass it
+  per call: `subagent { agent: "scout", task: "...", tier: "fast" }` (also
+  available per item in `tasks` and `chain`).
+- Resolution precedence per task: call-time `tier` → agent `model` → agent
+  `tier` → the parent's default model.
+- Explicit per-tier values always win; `auto: true` fills only unmapped tiers.
+- **Auto-picker:** with `auto: true`, tiers resolve from the model registry
+  relative to your `defaultModel`: `balanced` is always your default model;
+  `fast` is the cheapest model in the same brand family (e.g. `claude-*` /
+  `deepseek-*`); `deep` is the priciest family member, or collapses to your
+  default model when nothing bigger exists (it never jumps to another vendor's
+  family). `enabledModels` scoping is respected.
+- Without any mapping or `auto`, tiers fall back to the parent's default model
+  (the same behavior as today when no `--model` is passed).
+- Resolved models are reported in results, e.g.
+  `model: claude-opus-4-5 (tier: deep)`, with a `Note:` line when a tier fell
+  back or collapsed.
+- The mapping lives in the user-level settings file
+  (`~/.pi/agent/settings.json`). Project-local `.pi/settings.json` is not read
+  by the extension.
 
 ## How it works
 
