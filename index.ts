@@ -158,7 +158,10 @@ function readSettingsFile(): { tierConfig?: TierConfig; defaultModel?: string } 
 			: undefined;
 	return {
 		tierConfig: normalizeTierConfig(modelTiers),
-		defaultModel: typeof settings.defaultModel === "string" ? settings.defaultModel : undefined,
+		defaultModel:
+			typeof settings.defaultModel === "string" && settings.defaultModel.trim() !== ""
+				? settings.defaultModel
+				: undefined,
 	};
 }
 
@@ -843,18 +846,31 @@ export default function (pi: ExtensionAPI) {
 		runningCount = 0;
 	});
 
+	const tierParam = Type.Optional(
+		Type.Union([Type.Literal("fast"), Type.Literal("balanced"), Type.Literal("deep")], {
+			description:
+				"Model tier for this task: fast (small/cheap model), balanced (default model), deep (large/capable model). Resolved via subagent.modelTiers in settings.json; unmapped tiers fall back to the agent's model/tier, then the parent's default model.",
+		}),
+	);
+	const singleTierParam = Type.Optional(
+		Type.Union([Type.Literal("fast"), Type.Literal("balanced"), Type.Literal("deep")], {
+			description:
+				"Model tier for the subagent (single mode): fast, balanced, or deep. Resolved via subagent.modelTiers in settings.json; falls back to the agent's configured model/tier, then the parent's default model.",
+		}),
+	);
+
 	const TaskItem = Type.Object({
 		agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (from ~/.pi/agent/agents). Omit for a raw prompt using the built-in default agent." })),
 		task: Type.String({ description: "Task to delegate to the agent" }),
 		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-		tier: Type.Optional(Type.Union([Type.Literal("fast"), Type.Literal("balanced"), Type.Literal("deep")], { description: "Model tier for this task: fast (small/cheap model), balanced (default model), deep (large/capable model). Resolved via subagent.modelTiers in settings.json; unmapped tiers fall back to the agent's model/tier, then the parent's default model." })),
+		tier: tierParam,
 	});
 
 	const ChainItem = Type.Object({
 		agent: Type.Optional(Type.String({ description: "Name of the agent to invoke. Omit for a raw prompt using the built-in default agent." })),
 		task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-		tier: Type.Optional(Type.Union([Type.Literal("fast"), Type.Literal("balanced"), Type.Literal("deep")], { description: "Model tier for this task: fast (small/cheap model), balanced (default model), deep (large/capable model). Resolved via subagent.modelTiers in settings.json; unmapped tiers fall back to the agent's model/tier, then the parent's default model." })),
+		tier: tierParam,
 	});
 
 	pi.registerTool({
@@ -883,7 +899,7 @@ export default function (pi: ExtensionAPI) {
 			wait: Type.Optional(Type.Boolean({ description: "true (default): block until done and return results. false: spawn in background and return jobIds immediately.", default: true })),
 			notifyOnComplete: Type.Optional(Type.Boolean({ description: "When wait: false, deliver a summary message when the batch finishes. Default: true.", default: true })),
 			cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
-			tier: Type.Optional(Type.Union([Type.Literal("fast"), Type.Literal("balanced"), Type.Literal("deep")], { description: "Model tier for the subagent (single mode): fast, balanced, or deep. Resolved via subagent.modelTiers in settings.json; falls back to the agent's configured model/tier, then the parent's default model." })),
+			tier: singleTierParam,
 		}),
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
