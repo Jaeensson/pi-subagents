@@ -14,6 +14,7 @@ import {
 	applyEventLine,
 	buildChildArgs,
 	DEFAULT_AGENT_SYSTEM_PROMPT,
+	displayAgentName,
 	formatCompletionNotification,
 	formatStatusReport,
 	formatElapsed,
@@ -359,6 +360,15 @@ test("resolveAgent falls back to the built-in default agent for raw prompts", ()
 
 test("resolveAgent returns null for an unknown agent name", () => {
 	assert.equal(resolveAgent("nope", []), null);
+});
+
+test("displayAgentName returns the agent name when present", () => {
+	assert.equal(displayAgentName("scout"), "scout");
+});
+
+test("displayAgentName falls back to 'default' for omitted agents", () => {
+	assert.equal(displayAgentName(undefined), "default");
+	assert.equal(displayAgentName(""), "default");
 });
 
 // ── formatCompletionNotification / formatStatusReport ────────────────────────

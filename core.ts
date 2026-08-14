@@ -302,6 +302,11 @@ export function formatUsageStats(
 	return parts.join(" ");
 }
 
+/** Name shown for a task/step that may have omitted the agent; empty → "default". */
+export function displayAgentName(name: string | undefined): string {
+	return name?.trim() || "default";
+}
+
 // ── Agent resolution ─────────────────────────────────────────────────────────
 
 export function resolveAgent(name: string | undefined, discovered: AgentSummary[]): AgentSummary | null {

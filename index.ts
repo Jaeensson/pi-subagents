@@ -5,8 +5,8 @@
  * isolated context window. Supports:
  *
  *   - Single:   { agent?, task }                 (omit agent for a raw prompt → built-in default agent)
- *   - Parallel: { tasks: [{agent, task}, ...] }  (concurrent)
- *   - Chain:    { chain: [{agent, task, ...}] }  (sequential, {previous} placeholder)
+ *   - Parallel: { tasks: [{agent?, task}, ...] }  (concurrent; agent optional → default agent)
+ *   - Chain:    { chain: [{agent?, task, ...}] }  (sequential, {previous} placeholder; agent optional)
  *
  * Two execution modes per call:
  *   - wait: true  (default) — blocks until the subagent(s) finish, returns results.
@@ -32,6 +32,7 @@ import { discoverUserAgents, formatAgentList, getUserAgentsDir } from "./agents.
 import {
 	applyEventLine,
 	buildChildArgs,
+	displayAgentName,
 	formatCompletionNotification,
 	formatElapsed,
 	formatStatusReport,
@@ -450,7 +451,7 @@ async function waitForJobOrKill(jobId: string, signal?: AbortSignal, timeoutMs?:
 
 // ── Chain runner ─────────────────────────────────────────────────────────────
 
-function runChain(job: Job, chain: Array<{ agent: string; task: string; cwd?: string }>, agents: AgentSummary[], defaultCwd: string, signal?: AbortSignal) {
+function runChain(job: Job, chain: Array<{ agent?: string; task: string; cwd?: string }>, agents: AgentSummary[], defaultCwd: string, signal?: AbortSignal) {
 	// Kick off without awaiting — the job's completion drives callers.
 	void (async () => {
 		let previousOutput = "";
@@ -755,13 +756,13 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	const TaskItem = Type.Object({
-		agent: Type.String({ description: "Name of the agent to invoke (from ~/.pi/agent/agents)" }),
+		agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (from ~/.pi/agent/agents). Omit for a raw prompt using the built-in default agent." })),
 		task: Type.String({ description: "Task to delegate to the agent" }),
 		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	});
 
 	const ChainItem = Type.Object({
-		agent: Type.String({ description: "Name of the agent to invoke" }),
+		agent: Type.Optional(Type.String({ description: "Name of the agent to invoke. Omit for a raw prompt using the built-in default agent." })),
 		task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	});
@@ -772,7 +773,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context windows (each runs in its own pi process).",
 			"Modes (exactly one): single {agent?, task} (omit agent for a raw prompt using the built-in default agent),",
-			"parallel {tasks: [{agent, task}]}, chain {chain: [{agent, task}]} (sequential, {previous} placeholder).",
+			"parallel {tasks: [{agent?, task}]}, chain {chain: [{agent?, task}]} (sequential, {previous} placeholder; agent optional in both).",
 			"wait: true (default) blocks until done and returns results. wait: false spawns background subagents and",
 			"returns jobIds immediately so you can keep working; a summary is delivered on completion, full results via subagent_wait.",
 			`Agent definitions live in ${getUserAgentsDir()} (*.md with YAML frontmatter: name, description, tools, model).`,
@@ -787,8 +788,8 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (single mode). Omit for a raw prompt using the built-in default agent." })),
 			task: Type.Optional(Type.String({ description: "Task to delegate, or the raw prompt when no agent is given (single mode)" })),
-			tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution (max 8)" })),
-			chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution; use {previous} in a task to reference the prior output" })),
+			tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent?, task} for parallel execution (max 8); omit agent for a raw prompt using the built-in default agent" })),
+			chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent?, task} for sequential execution; use {previous} in a task to reference the prior output; omit agent for a raw prompt using the built-in default agent" })),
 			wait: Type.Optional(Type.Boolean({ description: "true (default): block until done and return results. false: spawn in background and return jobIds immediately.", default: true })),
 			notifyOnComplete: Type.Optional(Type.Boolean({ description: "When wait: false, deliver a summary message when the batch finishes. Default: true.", default: true })),
 			cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
@@ -818,8 +819,8 @@ export default function (pi: ExtensionAPI) {
 			// Pre-validate agents so we never spawn a partial batch with an unknown agent.
 			const unknownAgents = new Set<string>();
 			if (params.agent !== undefined && !resolveAgent(params.agent, agents)) unknownAgents.add(params.agent);
-			if (params.tasks) for (const t of params.tasks) if (!resolveAgent(t.agent, agents)) unknownAgents.add(t.agent);
-			if (params.chain) for (const c of params.chain) if (!resolveAgent(c.agent, agents)) unknownAgents.add(c.agent);
+			if (params.tasks) for (const t of params.tasks) if (t.agent !== undefined && !resolveAgent(t.agent, agents)) unknownAgents.add(t.agent);
+			if (params.chain) for (const c of params.chain) if (c.agent !== undefined && !resolveAgent(c.agent, agents)) unknownAgents.add(c.agent);
 			if (unknownAgents.size > 0) {
 				const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
 				return {
@@ -936,7 +937,7 @@ export default function (pi: ExtensionAPI) {
 					const step = args.chain[i];
 					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
 					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
-					text += "\n  " + theme.fg("muted", `${i + 1}.`) + " " + theme.fg("accent", step.agent) + theme.fg("dim", ` ${preview}`);
+					text += "\n  " + theme.fg("muted", `${i + 1}.`) + " " + theme.fg("accent", displayAgentName(step.agent)) + theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
 				return new Text(text, 0, 0);
@@ -945,7 +946,7 @@ export default function (pi: ExtensionAPI) {
 				let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", `parallel (${args.tasks.length} tasks)`) + theme.fg("muted", args.wait === false ? " [async]" : "");
 				for (const t of args.tasks.slice(0, 3)) {
 					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+					text += `\n  ${theme.fg("accent", displayAgentName(t.agent))}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);

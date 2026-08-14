@@ -65,11 +65,11 @@ Use subagent { agent: "scout", task: "Find all auth code", wait: true }
 # Raw prompt — no agent file needed (built-in default agent)
 Use subagent { task: "Summarize the README", wait: true }
 
-# Parallel — multiple agents concurrently
-Use subagent { tasks: [{ agent: "scout", task: "Find models" }, { agent: "scout", task: "Find providers" }], wait: true }
+# Parallel — multiple agents concurrently (omit agent for the default agent)
+Use subagent { tasks: [{ agent: "scout", task: "Find models" }, { task: "Find providers" }], wait: true }
 
-# Chain — sequential, {previous} placeholder gets the prior step's output
-Use subagent { chain: [{ agent: "scout", task: "Find the read tool" }, { agent: "planner", task: "Improve it: {previous}" }], wait: true }
+# Chain — sequential, {previous} placeholder gets the prior step's output (agent optional per step)
+Use subagent { chain: [{ agent: "scout", task: "Find the read tool" }, { task: "Improve it: {previous}" }], wait: true }
 
 # Asynchronous — parent keeps working while subagents run in the background
 # 1. Spawn:  subagent { agent: "scout", task: "...", wait: false }   → returns jobId
@@ -130,8 +130,9 @@ You are a scout agent. Find information quickly and report it compactly.
 
 - `name` and `description` are required; `tools` (comma-separated) and `model`
   are optional. Omit `tools` for the full default toolset.
-- Omit the agent entirely when calling `subagent` to use the built-in default
-  general-purpose agent (raw prompt mode).
+- Omit the agent entirely when calling `subagent` — in single, parallel, or
+  chain mode — to use the built-in default general-purpose agent (raw prompt
+  mode).
 - More sample agents (planner, reviewer, worker) ship with pi:
   `examples/extensions/subagent/agents/` inside the pi package — copy them to
   `~/.pi/agent/agents/`.
