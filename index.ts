@@ -25,7 +25,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ExtensionAPI, type ExtensionContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { discoverUserAgents, formatAgentList, getUserAgentsDir } from "./agents.ts";
@@ -40,11 +40,15 @@ import {
 	getFinalOutput,
 	getResultOutput,
 	isFailedState,
+	normalizeTierConfig,
 	resolveAgent,
+	resolveModel,
 	shouldNotify,
 	truncateOutput,
 	type AgentSummary,
+	type CatalogModel,
 	type MessageLike,
+	type TierConfig,
 	type UsageStats,
 } from "./core.ts";
 
@@ -74,6 +78,8 @@ interface Task {
 	stderr: string;
 	usage: UsageStats;
 	model?: string;
+	tierUsed?: string;
+	tierNote?: string;
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
@@ -108,6 +114,8 @@ interface TaskInfo {
 	messages: MessageLike[];
 	usage: UsageStats;
 	model?: string;
+	tierUsed?: string;
+	tierNote?: string;
 	stopReason?: string;
 	errorMessage?: string;
 }
@@ -116,6 +124,57 @@ interface ToolDetails {
 	mode: JobMode | "collect";
 	jobIds: string[];
 	tasks: TaskInfo[];
+}
+
+// ── Model tier context ───────────────────────────────────────────────────────
+
+/** Per-tool-call snapshot of tier config, default model, and catalog models. */
+interface ModelContext {
+	tierConfig?: TierConfig;
+	defaultModel?: string;
+	catalog: CatalogModel[];
+}
+
+/** Read `subagent.modelTiers` and `defaultModel` from the user's settings.json. */
+function readSettingsFile(): { tierConfig?: TierConfig; defaultModel?: string } {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(path.join(getAgentDir(), "settings.json"), "utf-8");
+	} catch {
+		return {};
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return {};
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+	const settings = parsed as Record<string, unknown>;
+	const subagent = settings.subagent;
+	const modelTiers =
+		subagent && typeof subagent === "object" && !Array.isArray(subagent)
+			? (subagent as Record<string, unknown>).modelTiers
+			: undefined;
+	return {
+		tierConfig: normalizeTierConfig(modelTiers),
+		defaultModel: typeof settings.defaultModel === "string" ? settings.defaultModel : undefined,
+	};
+}
+
+/** Build the model context for one tool call from the extension context. */
+function buildModelContext(ctx: ExtensionContext): ModelContext {
+	const settings = readSettingsFile();
+	const scopedIds = new Set(ctx.scopedModels.map((s) => s.model.id));
+	const catalog: CatalogModel[] = ctx.modelRegistry
+		.getAvailable()
+		.filter((m) => scopedIds.size === 0 || scopedIds.has(m.id))
+		.map((m) => ({ id: m.id, provider: m.provider, inputCost: m.cost.input }));
+	return {
+		tierConfig: settings.tierConfig,
+		defaultModel: settings.defaultModel ?? ctx.model?.id,
+		catalog,
+	};
 }
 
 // ── Registry (in-memory; children are killed on session shutdown) ───────────
@@ -143,6 +202,8 @@ function toTaskInfo(t: Task): TaskInfo {
 		messages: t.messages,
 		usage: t.usage,
 		model: t.model,
+		tierUsed: t.tierUsed,
+		tierNote: t.tierNote,
 		stopReason: t.stopReason,
 		errorMessage: t.errorMessage,
 	};
@@ -249,7 +310,21 @@ function killTask(task: Task) {
 	timer.unref?.();
 }
 
-async function spawnTask(agent: AgentSummary, taskText: string, cwd: string, jobId: string, step?: number): Promise<Task> {
+async function spawnTask(
+	agent: AgentSummary,
+	taskText: string,
+	cwd: string,
+	jobId: string,
+	options: { step?: number; tier?: string; modelCtx: ModelContext },
+): Promise<Task> {
+	const resolution = resolveModel({
+		callTier: options.tier,
+		agentModel: agent.model,
+		agentTier: agent.tier,
+		tierConfig: options.modelCtx.tierConfig,
+		defaultModel: options.modelCtx.defaultModel,
+		catalog: options.modelCtx.catalog,
+	});
 	const task: Task = {
 		id: randomUUID(),
 		jobId,
@@ -263,8 +338,10 @@ async function spawnTask(agent: AgentSummary, taskText: string, cwd: string, job
 		messages: [],
 		stderr: "",
 		usage: emptyUsage(),
-		model: agent.model,
-		step,
+		model: resolution.model,
+		tierUsed: resolution.tierUsed,
+		tierNote: resolution.note,
+		step: options.step,
 	};
 	tasks.set(task.id, task);
 	const job = jobs.get(jobId);
@@ -282,7 +359,7 @@ async function spawnTask(agent: AgentSummary, taskText: string, cwd: string, job
 			systemPromptFile = tmp.filePath;
 		}
 
-		const args = buildChildArgs({ model: agent.model, tools: agent.tools, systemPromptFile, task: taskText });
+		const args = buildChildArgs({ model: resolution.model, tools: agent.tools, systemPromptFile, task: taskText });
 		const invocation = getPiInvocation(args);
 		const proc = spawn(invocation.command, invocation.args, {
 			cwd,
@@ -451,7 +528,14 @@ async function waitForJobOrKill(jobId: string, signal?: AbortSignal, timeoutMs?:
 
 // ── Chain runner ─────────────────────────────────────────────────────────────
 
-function runChain(job: Job, chain: Array<{ agent?: string; task: string; cwd?: string }>, agents: AgentSummary[], defaultCwd: string, signal?: AbortSignal) {
+function runChain(
+	job: Job,
+	chain: Array<{ agent?: string; task: string; cwd?: string; tier?: string }>,
+	agents: AgentSummary[],
+	defaultCwd: string,
+	modelCtx: ModelContext,
+	signal?: AbortSignal,
+) {
 	// Kick off without awaiting — the job's completion drives callers.
 	void (async () => {
 		let previousOutput = "";
@@ -463,7 +547,11 @@ function runChain(job: Job, chain: Array<{ agent?: string; task: string; cwd?: s
 				job.errorMessage = `Chain stopped at step ${i + 1}: unknown agent "${step.agent}". Available agents: ${formatAgentList(agents).text}.`;
 				break;
 			}
-			const task = await spawnTask(agent, step.task.replace(/\{previous\}/g, previousOutput), step.cwd ?? defaultCwd, job.id, i + 1);
+			const task = await spawnTask(agent, step.task.replace(/\{previous\}/g, previousOutput), step.cwd ?? defaultCwd, job.id, {
+				step: i + 1,
+				tier: step.tier,
+				modelCtx,
+			});
 			const completed = await waitForTask(task.id, { signal });
 			if (!completed && signal?.aborted) {
 				killTask(task);
@@ -759,12 +847,14 @@ export default function (pi: ExtensionAPI) {
 		agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (from ~/.pi/agent/agents). Omit for a raw prompt using the built-in default agent." })),
 		task: Type.String({ description: "Task to delegate to the agent" }),
 		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+		tier: Type.Optional(Type.Union([Type.Literal("fast"), Type.Literal("balanced"), Type.Literal("deep")], { description: "Model tier for this task: fast (small/cheap model), balanced (default model), deep (large/capable model). Resolved via subagent.modelTiers in settings.json; unmapped tiers fall back to the agent's model/tier, then the parent's default model." })),
 	});
 
 	const ChainItem = Type.Object({
 		agent: Type.Optional(Type.String({ description: "Name of the agent to invoke. Omit for a raw prompt using the built-in default agent." })),
 		task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+		tier: Type.Optional(Type.Union([Type.Literal("fast"), Type.Literal("balanced"), Type.Literal("deep")], { description: "Model tier for this task: fast (small/cheap model), balanced (default model), deep (large/capable model). Resolved via subagent.modelTiers in settings.json; unmapped tiers fall back to the agent's model/tier, then the parent's default model." })),
 	});
 
 	pi.registerTool({
@@ -793,10 +883,12 @@ export default function (pi: ExtensionAPI) {
 			wait: Type.Optional(Type.Boolean({ description: "true (default): block until done and return results. false: spawn in background and return jobIds immediately.", default: true })),
 			notifyOnComplete: Type.Optional(Type.Boolean({ description: "When wait: false, deliver a summary message when the batch finishes. Default: true.", default: true })),
 			cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+			tier: Type.Optional(Type.Union([Type.Literal("fast"), Type.Literal("balanced"), Type.Literal("deep")], { description: "Model tier for the subagent (single mode): fast, balanced, or deep. Resolved via subagent.modelTiers in settings.json; falls back to the agent's configured model/tier, then the parent's default model." })),
 		}),
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agents = discoverUserAgents();
+			const modelCtx = buildModelContext(ctx);
 			const wait = params.wait ?? true;
 			const notifyOnComplete = params.notifyOnComplete ?? true;
 			const emit = onUpdate
@@ -833,7 +925,7 @@ export default function (pi: ExtensionAPI) {
 			// ── Chain mode ──
 			if (hasChain) {
 				const job = createJob("chain", shouldNotify(wait, notifyOnComplete), emit, params.chain!.length);
-				runChain(job, params.chain!, agents, params.cwd ?? ctx.cwd, wait ? signal : undefined);
+				runChain(job, params.chain!, agents, params.cwd ?? ctx.cwd, modelCtx, wait ? signal : undefined);
 				if (!wait) {
 					return { content: [{ type: "text", text: spawnResultText(job, "chain") }], details: jobDetails(job) };
 				}
@@ -872,7 +964,7 @@ export default function (pi: ExtensionAPI) {
 				if (wait) {
 					await mapWithConcurrencyLimit(tasksParam, MAX_CONCURRENCY, async (t) => {
 						const agent = resolveAgent(t.agent, agents)!;
-						const task = await spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id);
+						const task = await spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, { tier: t.tier, modelCtx });
 						const completed = await waitForTask(task.id, { signal });
 						if (!completed && signal?.aborted) {
 							killTask(task);
@@ -900,7 +992,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				for (const t of tasksParam) {
 					const agent = resolveAgent(t.agent, agents)!;
-					void spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id);
+					void spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, { tier: t.tier, modelCtx });
 				}
 				return { content: [{ type: "text", text: spawnResultText(job, "parallel") }], details: jobDetails(job) };
 			}
@@ -908,7 +1000,7 @@ export default function (pi: ExtensionAPI) {
 			// ── Single mode ──
 			const agent = resolveAgent(params.agent, agents)!;
 			const job = createJob("single", shouldNotify(wait, notifyOnComplete), emit);
-			const task = await spawnTask(agent, params.task ?? "", params.cwd ?? ctx.cwd, job.id);
+			const task = await spawnTask(agent, params.task ?? "", params.cwd ?? ctx.cwd, job.id, { tier: params.tier, modelCtx });
 			if (!wait) {
 				return { content: [{ type: "text", text: spawnResultText(job, "single") }], details: jobDetails(job) };
 			}
