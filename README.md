@@ -169,9 +169,11 @@ through a central mapping in pi's `settings.json`:
 - **Auto-picker:** with `auto: true`, tiers resolve from the model registry
   relative to your `defaultModel`: `balanced` is always your default model;
   `fast` is the cheapest model in the same brand family (e.g. `claude-*` /
-  `deepseek-*`); `deep` is the priciest family member, or collapses to your
-  default model when nothing bigger exists (it never jumps to another vendor's
-  family). `enabledModels` scoping is respected.
+  `deepseek-*`), falling back to the provider's cheapest model when the
+  default is already the family's cheapest; `deep` is the priciest family
+  member, or collapses to your default model when nothing bigger exists
+  (deep never jumps to another vendor's family). `enabledModels` scoping is
+  respected.
 - Without any mapping or `auto`, tiers fall back to the parent's default model
   (the same behavior as today when no `--model` is passed).
 - Resolved models are reported in results, e.g.
