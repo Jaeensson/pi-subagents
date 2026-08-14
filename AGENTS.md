@@ -17,9 +17,18 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   under Node's type stripping in `node --test`.
 - Add unit tests in `tests/core.test.mjs` for new pure logic; watch them fail
   first.
-- `index.ts` is the extension entry (tools, job registry, process spawning,
-  TUI rendering); `agents.ts` discovers agent definitions from
-  `~/.pi/agent/agents/*.md`.
+- Module layout (each file is a single responsibility):
+  - `index.ts` — extension entry only: session hooks + tool registration
+  - `runtime.ts` — in-memory task/job registry, waiters, completion checks
+    (no imports from sibling modules; safe to import from anywhere)
+  - `process.ts` — child pi process lifecycle (spawn/kill/finalize)
+  - `jobs.ts` — job orchestration: chain runner, concurrency limiter,
+    result builders, model-tier context
+  - `tui.ts` — TUI rendering helpers + persistent status widget
+  - `tools/*.ts` — one file per registered tool (`defineTool`)
+- Keep the dependency graph acyclic: runtime → process → jobs → tools;
+  tui depends only on runtime + core.
+- `agents.ts` discovers agent definitions from `~/.pi/agent/agents/*.md`.
 - Agent files: YAML frontmatter (`name`, `description` required; `tools`,
   `model`, `tier` optional) + markdown system prompt body. `tier` is
   `fast | balanced | deep`, resolved via `subagent.modelTiers` in pi's

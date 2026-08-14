@@ -228,9 +228,18 @@ ln -sfn $STORE/node_modules/typebox node_modules/typebox
 
 ```
 ~/.pi/agent/extensions/subagent/
-├── index.ts      # entry: tools, job registry, process spawning, TUI rendering
-├── agents.ts     # agent discovery from ~/.pi/agent/agents
-├── core.ts       # pure logic: parsing, event handling, formatting, truncation
+├── index.ts            # entry: session hooks + tool registration
+├── runtime.ts          # task/job registry, waiters, completion checks
+├── process.ts          # child pi process lifecycle (spawn/kill/finalize)
+├── jobs.ts             # job orchestration: chain runner, results, model context
+├── tui.ts              # TUI rendering helpers + status widget
+├── agents.ts           # agent discovery from ~/.pi/agent/agents
+├── core.ts             # pure logic: parsing, event handling, formatting, truncation
+├── tools/              # one file per registered tool
+│   ├── subagent.ts
+│   ├── subagent-wait.ts
+│   ├── subagent-status.ts
+│   └── subagent-agents.ts
 └── tests/
     └── core.test.mjs   # node:test suite
 ```
