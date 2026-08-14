@@ -153,6 +153,9 @@ export function familyStem(id: string): string {
  * Pick a model for a fast/deep tier from the catalog, relative to the
  * default model. Cost-ranked within the default model's family; cost ties
  * prefer the canonical (shorter) id so dated duplicates lose.
+ *
+ * Picks are returned provider-qualified (`provider/id`) so they are
+ * unambiguous when the same id exists on multiple authenticated providers.
  */
 export function pickAutoTier(
 	level: "fast" | "deep",
@@ -162,6 +165,7 @@ export function pickAutoTier(
 	if (!defaultModel) return {};
 	const def = catalog.find((m) => m.id === defaultModel);
 	if (!def) return {};
+	const qualified = (m: CatalogModel) => `${m.provider}/${m.id}`;
 	const family = catalog.filter(
 		(m) => m.provider === def.provider && familyStem(m.id) === familyStem(def.id),
 	);
@@ -169,19 +173,19 @@ export function pickAutoTier(
 		[...models].sort((a, b) => a.inputCost - b.inputCost || a.id.length - b.id.length);
 	if (level === "fast") {
 		const cheaper = byCost(family).filter((m) => m.inputCost < def.inputCost);
-		if (cheaper.length > 0) return { model: cheaper[0].id };
+		if (cheaper.length > 0) return { model: qualified(cheaper[0]) };
 		const providerModels = byCost(catalog.filter((m) => m.provider === def.provider));
 		const pick = providerModels[0];
 		if (!pick) return {};
-		if (pick.id === def.id) return { model: pick.id, collapsed: true };
+		if (pick.id === def.id) return { model: qualified(pick), collapsed: true };
 		const inFamily = familyStem(pick.id) === familyStem(def.id);
-		return inFamily ? { model: pick.id } : { model: pick.id, outsideFamily: true };
+		return inFamily ? { model: qualified(pick) } : { model: qualified(pick), outsideFamily: true };
 	}
 	const pricier = [...family]
 		.filter((m) => m.inputCost > def.inputCost)
 		.sort((a, b) => b.inputCost - a.inputCost || a.id.length - b.id.length);
-	if (pricier.length > 0) return { model: pricier[0].id };
-	return { model: def.id, collapsed: true };
+	if (pricier.length > 0) return { model: qualified(pricier[0]) };
+	return { model: qualified(def), collapsed: true };
 }
 
 /**
@@ -229,7 +233,10 @@ function resolveTier(
 ): string | undefined {
 	if (tierConfig?.[level]) return tierConfig[level];
 	if (!tierConfig?.auto) return undefined;
-	if (level === "balanced") return defaultModel;
+	if (level === "balanced") {
+		const def = catalog.find((m) => m.id === defaultModel);
+		return def ? `${def.provider}/${def.id}` : defaultModel;
+	}
 	if (!defaultModel) return undefined;
 	const picked = pickAutoTier(level, { defaultModel, catalog });
 	if (picked.model) {

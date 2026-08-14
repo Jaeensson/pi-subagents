@@ -158,10 +158,10 @@ test("pickAutoTier picks same-family cheaper/pricier models around the default",
 		{ id: "qwen-whatever", provider: "anthropic", inputCost: 0.5 },
 	];
 	assert.deepEqual(pickAutoTier("fast", { defaultModel: "claude-sonnet-4-5", catalog }), {
-		model: "claude-haiku-4-5",
+		model: "anthropic/claude-haiku-4-5",
 	});
 	assert.deepEqual(pickAutoTier("deep", { defaultModel: "claude-sonnet-4-5", catalog }), {
-		model: "claude-opus-4-5",
+		model: "anthropic/claude-opus-4-5",
 	});
 });
 
@@ -172,7 +172,7 @@ test("pickAutoTier deep prefers the canonical id on cost ties", () => {
 		{ id: "claude-opus-4-5", provider: "anthropic", inputCost: 1 },
 	];
 	assert.deepEqual(pickAutoTier("deep", { defaultModel: "claude-opus-4-5", catalog }), {
-		model: "claude-haiku-4-5",
+		model: "anthropic/claude-haiku-4-5",
 	});
 });
 
@@ -182,7 +182,7 @@ test("pickAutoTier collapses deep when no pricier family member exists", () => {
 		{ id: "deepseek-v4-pro", provider: "opencode-go", inputCost: 0.435 },
 	];
 	assert.deepEqual(pickAutoTier("deep", { defaultModel: "deepseek-v4-pro", catalog }), {
-		model: "deepseek-v4-pro",
+		model: "opencode-go/deepseek-v4-pro",
 		collapsed: true,
 	});
 });
@@ -193,7 +193,7 @@ test("pickAutoTier fast falls back to the provider's cheapest model outside the 
 		{ id: "mini-m3", provider: "opencode-go", inputCost: 1 },
 	];
 	assert.deepEqual(pickAutoTier("fast", { defaultModel: "gpt-5.4", catalog }), {
-		model: "mini-m3",
+		model: "opencode-go/mini-m3",
 		outsideFamily: true,
 	});
 });
@@ -204,7 +204,7 @@ test("pickAutoTier ignores other providers sharing the family stem", () => {
 		{ id: "claude-haiku-4-5", provider: "other-provider", inputCost: 1 },
 	];
 	assert.deepEqual(pickAutoTier("fast", { defaultModel: "claude-sonnet-4-5", catalog }), {
-		model: "claude-sonnet-4-5",
+		model: "anthropic/claude-sonnet-4-5",
 		collapsed: true,
 	});
 });
@@ -216,7 +216,7 @@ test("pickAutoTier fast keeps in-family picks unflagged when the cheapest ties t
 		{ id: "kimi-k3", provider: "anthropic", inputCost: 2 },
 	];
 	assert.deepEqual(pickAutoTier("fast", { defaultModel: "claude-sonnet-4-5-20251001", catalog }), {
-		model: "claude-haiku-4-5",
+		model: "anthropic/claude-haiku-4-5",
 	});
 });
 
@@ -226,7 +226,7 @@ test("pickAutoTier fast collapses when the default is already cheapest", () => {
 		{ id: "kimi-k3", provider: "opencode-go", inputCost: 3 },
 	];
 	assert.deepEqual(pickAutoTier("fast", { defaultModel: "gpt-5.4", catalog }), {
-		model: "gpt-5.4",
+		model: "opencode-go/gpt-5.4",
 		collapsed: true,
 	});
 });
@@ -264,7 +264,7 @@ test("resolveModel uses auto for balanced and fast tiers", () => {
 			defaultModel: "claude-sonnet-4-5",
 			catalog: tierCatalog,
 		}),
-		{ model: "claude-sonnet-4-5", tierUsed: "balanced", note: undefined },
+		{ model: "anthropic/claude-sonnet-4-5", tierUsed: "balanced", note: undefined },
 	);
 	assert.deepEqual(
 		resolveModel({
@@ -273,7 +273,7 @@ test("resolveModel uses auto for balanced and fast tiers", () => {
 			defaultModel: "claude-sonnet-4-5",
 			catalog: tierCatalog,
 		}),
-		{ model: "claude-haiku-4-5", tierUsed: "fast", note: undefined },
+		{ model: "anthropic/claude-haiku-4-5", tierUsed: "fast", note: undefined },
 	);
 });
 
@@ -287,7 +287,7 @@ test("resolveModel reports deep collapse through auto", () => {
 			{ id: "deepseek-v4-pro", provider: "opencode-go", inputCost: 0.435 },
 		],
 	});
-	assert.equal(r.model, "deepseek-v4-pro");
+	assert.equal(r.model, "opencode-go/deepseek-v4-pro");
 	assert.equal(r.tierUsed, "deep");
 	assert.ok(r.note?.includes("collapsed"));
 });

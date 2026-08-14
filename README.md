@@ -174,6 +174,10 @@ through a central mapping in pi's `settings.json`:
   member, or collapses to your default model when nothing bigger exists
   (deep never jumps to another vendor's family). `enabledModels` scoping is
   respected.
+- Auto-picked models are passed to subagents provider-qualified (e.g.
+  `opencode-go/gpt-5.6-luna`) to avoid ambiguity when a model id exists on
+  multiple providers. Explicit mappings may also use the `provider/model`
+  form.
 - Without any mapping or `auto`, tiers fall back to the parent's default model
   (the same behavior as today when no `--model` is passed).
 - Resolved models are reported in results, e.g.
