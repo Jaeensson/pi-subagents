@@ -882,7 +882,7 @@ export default function (pi: ExtensionAPI) {
 			"parallel {tasks: [{agent?, task}]}, chain {chain: [{agent?, task}]} (sequential, {previous} placeholder; agent optional in both).",
 			"wait: true (default) blocks until done and returns results. wait: false spawns background subagents and",
 			"returns jobIds immediately so you can keep working; a summary is delivered on completion, full results via subagent_wait.",
-			`Agent definitions live in ${getUserAgentsDir()} (*.md with YAML frontmatter: name, description, tools, model).`,
+			`Agent definitions live in ${getUserAgentsDir()} (*.md with YAML frontmatter: name, description, tools, model, tier).`,
 			"List available agents with subagent_agents.",
 		].join(" "),
 		promptSnippet:
@@ -1151,7 +1151,11 @@ export default function (pi: ExtensionAPI) {
 				acc.turns += t.usage.turns;
 				return acc;
 			}, { input: 0, output: 0, cost: 0, turns: 0 });
-			const usageStr = formatUsageStats(usageAgg);
+			const usageStr = formatUsageStats(
+				usageAgg,
+				details.mode === "single" ? details.tasks[0]?.model : undefined,
+				details.mode === "single" ? details.tasks[0]?.tierUsed : undefined,
+			);
 			if (usageStr && details.tasks.every((t) => t.status !== "running")) {
 				lines.push(`\n${theme.fg("dim", usageStr)}`);
 			}
@@ -1226,7 +1230,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_agents",
 		label: "Subagent Agents",
-		description: `List available subagent definitions from ${getUserAgentsDir()}. Each is a markdown file with YAML frontmatter (name, description, tools, model) and a system prompt body.`,
+		description: `List available subagent definitions from ${getUserAgentsDir()}. Each is a markdown file with YAML frontmatter (name, description, tools, model, tier) and a system prompt body.`,
 		promptSnippet: "List available subagent definitions",
 		parameters: Type.Object({}),
 
@@ -1236,6 +1240,7 @@ export default function (pi: ExtensionAPI) {
 				const parts = [`- **${a.name}** — ${a.description}`];
 				if (a.tools) parts.push(`  - tools: ${a.tools.join(", ")}`);
 				if (a.model) parts.push(`  - model: ${a.model}`);
+				if (a.tier) parts.push(`  - tier: ${a.tier}`);
 				return parts.join("\n");
 			});
 			const text = [
