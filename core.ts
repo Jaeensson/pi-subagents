@@ -175,9 +175,9 @@ export function pickAutoTier(
 		if (pick.id === def.id) return { model: pick.id, collapsed: true };
 		return { model: pick.id, outsideFamily: true };
 	}
-	const pricier = byCost(family)
+	const pricier = [...family]
 		.filter((m) => m.inputCost > def.inputCost)
-		.reverse();
+		.sort((a, b) => b.inputCost - a.inputCost || a.id.length - b.id.length);
 	if (pricier.length > 0) return { model: pricier[0].id };
 	return { model: def.id, collapsed: true };
 }

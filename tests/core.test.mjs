@@ -151,6 +151,17 @@ test("pickAutoTier picks same-family cheaper/pricier models around the default",
 	});
 });
 
+test("pickAutoTier deep prefers the canonical id on cost ties", () => {
+	const catalog = [
+		{ id: "claude-haiku-4-5", provider: "anthropic", inputCost: 3 },
+		{ id: "claude-haiku-4-5-20251001", provider: "anthropic", inputCost: 3 },
+		{ id: "claude-opus-4-5", provider: "anthropic", inputCost: 1 },
+	];
+	assert.deepEqual(pickAutoTier("deep", { defaultModel: "claude-opus-4-5", catalog }), {
+		model: "claude-haiku-4-5",
+	});
+});
+
 test("pickAutoTier collapses deep when no pricier family member exists", () => {
 	const catalog = [
 		{ id: "deepseek-v4-flash", provider: "opencode-go", inputCost: 0.14 },
