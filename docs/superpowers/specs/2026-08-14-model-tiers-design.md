@@ -81,14 +81,16 @@ Applied per tier only when `auto: true` and no explicit mapping for that tier:
    family. Not found (custom/local model) → inherit parent default for all
    tiers.
 2. Cluster that provider's catalog models into **name families** around
-   `defaultModel`. A family is the set of model ids sharing the same
-   non-suffixed stem as the default: strip trailing `-YYYYMMDD` date suffixes
-   (e.g. `claude-haiku-4-5-20251001` → `claude-haiku-4-5`) and known variant
-   keywords (`-latest`), then group ids whose stems share the same dot-free
-   prefix up to the last `-`-separated segment (so `deepseek-v4-flash` and
-   `deepseek-v4-pro` form one family via `deepseek-v4`). Dated duplicates of
-   the same stem are considered equivalent to the canonical id for ranking.
-   Filter by `enabledModels` patterns from settings when set.
+   `defaultModel`. A family is the set of model ids whose date-stripped id
+   starts with the same brand prefix: strip trailing `-YYYYMMDD` date
+   suffixes and a trailing `-latest` from each id, then group by the first
+   `-`-separated segment (`claude-haiku-4-5`, `claude-sonnet-4-5` and
+   `claude-opus-4-5` all belong to the `claude` family;
+   `deepseek-v4-flash` and `deepseek-v4-pro` belong to `deepseek`). Brand
+   families keep provider trios intact so `deep` can reach Opus. Dated
+   duplicates of the same stem are equivalent to the canonical id; when costs
+   tie, ranking prefers the canonical (shorter) id. Filter by
+   `enabledModels` patterns from settings when set.
 3. **balanced** = `defaultModel`, always.
 4. **fast** = cheapest same-family model (by input cost) that is cheaper than
    the default; if none, cheapest model in the provider overall.
