@@ -54,6 +54,7 @@ export interface AgentSummary {
 	source: "user" | "builtin";
 	filePath: string;
 	model?: string;
+	tier?: string;
 	tools?: string[];
 }
 
@@ -251,12 +252,12 @@ function resolveTier(
  *
  * Frontmatter must be delimited by `---` lines at the top of the file and
  * contain at least `name` and `description`. Supported keys (flat, single
- * line): name, description, tools (comma-separated), model. Values may be
+ * line): name, description, tools (comma-separated), model, tier. Values may be
  * quoted with single or double quotes.
  */
 export function parseAgentMarkdown(
 	content: string,
-): { name: string; description: string; tools?: string[]; model?: string; systemPrompt: string } | null {
+): { name: string; description: string; tools?: string[]; model?: string; tier?: string; systemPrompt: string } | null {
 	const lines = content.split("\n");
 	if (lines.length === 0 || lines[0].trim() !== "---") return null;
 
@@ -297,6 +298,7 @@ export function parseAgentMarkdown(
 		.map((t) => t.trim())
 		.filter(Boolean);
 	const model = frontmatter.get("model");
+	const tier = frontmatter.get("tier");
 
 	const systemPrompt = lines.slice(endIdx + 1).join("\n").trimStart().replace(/\n$/, "");
 
@@ -305,6 +307,7 @@ export function parseAgentMarkdown(
 		description,
 		tools: tools && tools.length > 0 ? tools : undefined,
 		model: model || undefined,
+		tier: tier || undefined,
 		systemPrompt,
 	};
 }

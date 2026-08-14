@@ -90,6 +90,19 @@ test("parseAgentMarkdown allows empty body and missing optional fields", () => {
 	assert.equal(agent.tools, undefined);
 });
 
+test("parseAgentMarkdown parses the tier key when present", () => {
+	const agent = parseAgentMarkdown("---\nname: planner\ndescription: plans\ntier: deep\n---\nBody");
+	assert.ok(agent);
+	assert.equal(agent.tier, "deep");
+});
+
+test("parseAgentMarkdown leaves tier undefined when absent and keeps raw invalid values", () => {
+	const absent = parseAgentMarkdown("---\nname: a\ndescription: b\n---\n");
+	assert.equal(absent.tier, undefined);
+	const invalid = parseAgentMarkdown("---\nname: a\ndescription: b\ntier: mega\n---\n");
+	assert.equal(invalid.tier, "mega");
+});
+
 // ── Model tiers: normalizeTierConfig / isTierLevel ───────────────────────────
 
 test("normalizeTierConfig extracts auto and level mappings, ignores junk", () => {
