@@ -201,17 +201,20 @@ export function resolveModel(options: {
 }): ModelResolution {
 	const { callTier, agentModel, agentTier, tierConfig, defaultModel, catalog } = options;
 	const notes: string[] = [];
+	const pushNote = (text: string) => {
+		if (!notes.includes(text)) notes.push(text);
+	};
 
 	if (isTierLevel(callTier)) {
 		const resolved = resolveTier(callTier, tierConfig, defaultModel, catalog, notes);
 		if (resolved) return { model: resolved, tierUsed: callTier, note: notes.join("; ") || undefined };
-		notes.push(`tier "${callTier}" is not configured; falling back`);
+		pushNote(`tier "${callTier}" could not be resolved; falling back`);
 	}
 	if (agentModel) return { model: agentModel, note: notes.join("; ") || undefined };
 	if (isTierLevel(agentTier)) {
 		const resolved = resolveTier(agentTier, tierConfig, defaultModel, catalog, notes);
 		if (resolved) return { model: resolved, tierUsed: agentTier, note: notes.join("; ") || undefined };
-		notes.push(`tier "${agentTier}" is not configured; falling back`);
+		pushNote(`tier "${agentTier}" could not be resolved; falling back`);
 	}
 	return { model: undefined, note: notes.join("; ") || undefined };
 }

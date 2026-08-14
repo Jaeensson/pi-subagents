@@ -301,7 +301,31 @@ test("resolveModel resolves the agent tier when no call tier or agent model appl
 test("resolveModel falls back to the parent default with a note when tiers are unresolvable", () => {
 	assert.deepEqual(
 		resolveModel({ callTier: "fast", tierConfig: {}, catalog: tierCatalog }),
-		{ model: undefined, note: 'tier "fast" is not configured; falling back' },
+		{ model: undefined, note: 'tier "fast" could not be resolved; falling back' },
+	);
+});
+
+test("resolveModel deduplicates identical fallback notes across both tier levels", () => {
+	assert.deepEqual(
+		resolveModel({ callTier: "fast", agentTier: "fast", tierConfig: {}, catalog: tierCatalog }),
+		{ model: undefined, note: 'tier "fast" could not be resolved; falling back' },
+	);
+});
+
+test("resolveModel accumulates distinct fallback notes across levels", () => {
+	assert.deepEqual(
+		resolveModel({ callTier: "fast", agentTier: "deep", tierConfig: {}, catalog: tierCatalog }),
+		{
+			model: undefined,
+			note: 'tier "fast" could not be resolved; falling back; tier "deep" could not be resolved; falling back',
+		},
+	);
+});
+
+test("resolveModel reports auto configured but unresolvable", () => {
+	assert.deepEqual(
+		resolveModel({ callTier: "fast", tierConfig: { auto: true }, catalog: tierCatalog }),
+		{ model: undefined, note: 'tier "fast" could not be resolved; falling back' },
 	);
 });
 
