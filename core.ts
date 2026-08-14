@@ -173,7 +173,8 @@ export function pickAutoTier(
 		const pick = providerModels[0];
 		if (!pick) return {};
 		if (pick.id === def.id) return { model: pick.id, collapsed: true };
-		return { model: pick.id, outsideFamily: true };
+		const inFamily = familyStem(pick.id) === familyStem(def.id);
+		return inFamily ? { model: pick.id } : { model: pick.id, outsideFamily: true };
 	}
 	const pricier = [...family]
 		.filter((m) => m.inputCost > def.inputCost)

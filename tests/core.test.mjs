@@ -184,6 +184,28 @@ test("pickAutoTier fast falls back to the provider's cheapest model outside the 
 	});
 });
 
+test("pickAutoTier ignores other providers sharing the family stem", () => {
+	const catalog = [
+		{ id: "claude-sonnet-4-5", provider: "anthropic", inputCost: 3 },
+		{ id: "claude-haiku-4-5", provider: "other-provider", inputCost: 1 },
+	];
+	assert.deepEqual(pickAutoTier("fast", { defaultModel: "claude-sonnet-4-5", catalog }), {
+		model: "claude-sonnet-4-5",
+		collapsed: true,
+	});
+});
+
+test("pickAutoTier fast keeps in-family picks unflagged when the cheapest ties the default", () => {
+	const catalog = [
+		{ id: "claude-haiku-4-5", provider: "anthropic", inputCost: 1 },
+		{ id: "claude-sonnet-4-5-20251001", provider: "anthropic", inputCost: 1 },
+		{ id: "kimi-k3", provider: "anthropic", inputCost: 2 },
+	];
+	assert.deepEqual(pickAutoTier("fast", { defaultModel: "claude-sonnet-4-5-20251001", catalog }), {
+		model: "claude-haiku-4-5",
+	});
+});
+
 test("pickAutoTier fast collapses when the default is already cheapest", () => {
 	const catalog = [
 		{ id: "gpt-5.4", provider: "opencode-go", inputCost: 2 },
