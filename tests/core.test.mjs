@@ -29,6 +29,7 @@ import {
 	parseAgentMarkdown,
 	pickAutoTier,
 	resolveAgent,
+	resolveModel,
 	shouldNotify,
 	truncateOutput,
 } from "../core.ts";
@@ -220,6 +221,99 @@ test("pickAutoTier fast collapses when the default is already cheapest", () => {
 test("pickAutoTier returns nothing for missing defaults or unknown models", () => {
 	assert.deepEqual(pickAutoTier("fast", { defaultModel: undefined, catalog: [] }), {});
 	assert.deepEqual(pickAutoTier("deep", { defaultModel: "llama3.1:8b", catalog: [] }), {});
+});
+
+// ── Model tiers: resolveModel ────────────────────────────────────────────────
+
+const tierCatalog = [
+	{ id: "claude-haiku-4-5", provider: "anthropic", inputCost: 1 },
+	{ id: "claude-sonnet-4-5", provider: "anthropic", inputCost: 3 },
+	{ id: "claude-opus-4-5", provider: "anthropic", inputCost: 15 },
+];
+
+test("resolveModel prefers an explicit call-time tier mapping over the agent model", () => {
+	assert.deepEqual(
+		resolveModel({
+			callTier: "deep",
+			agentModel: "claude-haiku-4-5",
+			tierConfig: { deep: "claude-opus-4-5" },
+			catalog: tierCatalog,
+		}),
+		{ model: "claude-opus-4-5", tierUsed: "deep", note: undefined },
+	);
+});
+
+test("resolveModel uses auto for balanced and fast tiers", () => {
+	assert.deepEqual(
+		resolveModel({
+			callTier: "balanced",
+			tierConfig: { auto: true },
+			defaultModel: "claude-sonnet-4-5",
+			catalog: tierCatalog,
+		}),
+		{ model: "claude-sonnet-4-5", tierUsed: "balanced", note: undefined },
+	);
+	assert.deepEqual(
+		resolveModel({
+			callTier: "fast",
+			tierConfig: { auto: true },
+			defaultModel: "claude-sonnet-4-5",
+			catalog: tierCatalog,
+		}),
+		{ model: "claude-haiku-4-5", tierUsed: "fast", note: undefined },
+	);
+});
+
+test("resolveModel reports deep collapse through auto", () => {
+	const r = resolveModel({
+		agentTier: "deep",
+		tierConfig: { auto: true },
+		defaultModel: "deepseek-v4-pro",
+		catalog: [
+			{ id: "deepseek-v4-flash", provider: "opencode-go", inputCost: 0.14 },
+			{ id: "deepseek-v4-pro", provider: "opencode-go", inputCost: 0.435 },
+		],
+	});
+	assert.equal(r.model, "deepseek-v4-pro");
+	assert.equal(r.tierUsed, "deep");
+	assert.ok(r.note?.includes("collapsed"));
+});
+
+test("resolveModel agent model beats agent tier when no call tier is given", () => {
+	assert.deepEqual(
+		resolveModel({
+			agentModel: "claude-opus-4-5",
+			agentTier: "fast",
+			tierConfig: { fast: "claude-haiku-4-5" },
+			catalog: tierCatalog,
+		}),
+		{ model: "claude-opus-4-5", note: undefined },
+	);
+});
+
+test("resolveModel resolves the agent tier when no call tier or agent model applies", () => {
+	assert.deepEqual(
+		resolveModel({ agentTier: "deep", tierConfig: { deep: "claude-opus-4-5" }, catalog: tierCatalog }),
+		{ model: "claude-opus-4-5", tierUsed: "deep", note: undefined },
+	);
+});
+
+test("resolveModel falls back to the parent default with a note when tiers are unresolvable", () => {
+	assert.deepEqual(
+		resolveModel({ callTier: "fast", tierConfig: {}, catalog: tierCatalog }),
+		{ model: undefined, note: 'tier "fast" is not configured; falling back' },
+	);
+});
+
+test("resolveModel ignores invalid tier strings and uses the agent model", () => {
+	assert.deepEqual(
+		resolveModel({ callTier: "mega", agentModel: "claude-haiku-4-5", catalog: tierCatalog }),
+		{ model: "claude-haiku-4-5", note: undefined },
+	);
+});
+
+test("resolveModel returns no model when nothing applies", () => {
+	assert.deepEqual(resolveModel({ catalog: tierCatalog }), { model: undefined, note: undefined });
 });
 
 // ── buildChildArgs ───────────────────────────────────────────────────────────

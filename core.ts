@@ -183,6 +183,64 @@ export function pickAutoTier(
 	return { model: def.id, collapsed: true };
 }
 
+/**
+ * Resolve which concrete model a task should run with.
+ *
+ * Precedence: call-time tier → agent frontmatter model → agent frontmatter
+ * tier → parent default (inherit, model undefined). A requested tier resolves
+ * via the explicit mapping first, then the auto-picker when enabled; an
+ * unresolvable tier falls through to the next precedence level with a note.
+ */
+export function resolveModel(options: {
+	callTier?: string;
+	agentModel?: string;
+	agentTier?: string;
+	tierConfig?: TierConfig;
+	defaultModel?: string;
+	catalog: CatalogModel[];
+}): ModelResolution {
+	const { callTier, agentModel, agentTier, tierConfig, defaultModel, catalog } = options;
+	const notes: string[] = [];
+
+	if (isTierLevel(callTier)) {
+		const resolved = resolveTier(callTier, tierConfig, defaultModel, catalog, notes);
+		if (resolved) return { model: resolved, tierUsed: callTier, note: notes.join("; ") || undefined };
+		notes.push(`tier "${callTier}" is not configured; falling back`);
+	}
+	if (agentModel) return { model: agentModel, note: notes.join("; ") || undefined };
+	if (isTierLevel(agentTier)) {
+		const resolved = resolveTier(agentTier, tierConfig, defaultModel, catalog, notes);
+		if (resolved) return { model: resolved, tierUsed: agentTier, note: notes.join("; ") || undefined };
+		notes.push(`tier "${agentTier}" is not configured; falling back`);
+	}
+	return { model: undefined, note: notes.join("; ") || undefined };
+}
+
+function resolveTier(
+	level: TierLevel,
+	tierConfig: TierConfig | undefined,
+	defaultModel: string | undefined,
+	catalog: CatalogModel[],
+	notes: string[],
+): string | undefined {
+	if (tierConfig?.[level]) return tierConfig[level];
+	if (!tierConfig?.auto) return undefined;
+	if (level === "balanced") return defaultModel;
+	if (!defaultModel) return undefined;
+	const picked = pickAutoTier(level, { defaultModel, catalog });
+	if (picked.model) {
+		if (picked.collapsed) {
+			notes.push(
+				`tier "${level}" collapsed to the default model (no ${level === "fast" ? "cheaper" : "pricier"} model in its family)`,
+			);
+		} else if (picked.outsideFamily) {
+			notes.push(`tier "${level}" fell back to the provider's cheapest model outside the default family`);
+		}
+		return picked.model;
+	}
+	return undefined;
+}
+
 // ── Agent markdown parsing ───────────────────────────────────────────────────
 
 /**
