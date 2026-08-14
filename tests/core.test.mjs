@@ -23,6 +23,8 @@ import {
 	getFinalOutput,
 	getResultOutput,
 	isFailedState,
+	normalizeTierConfig,
+	isTierLevel,
 	parseAgentMarkdown,
 	resolveAgent,
 	shouldNotify,
@@ -83,6 +85,42 @@ test("parseAgentMarkdown allows empty body and missing optional fields", () => {
 	assert.equal(agent.systemPrompt, "");
 	assert.equal(agent.model, undefined);
 	assert.equal(agent.tools, undefined);
+});
+
+// ── Model tiers: normalizeTierConfig / isTierLevel ───────────────────────────
+
+test("normalizeTierConfig extracts auto and level mappings, ignores junk", () => {
+	assert.deepEqual(
+		normalizeTierConfig({ auto: true, fast: "a", balanced: "b", deep: "c", junk: 1 }),
+		{ auto: true, fast: "a", balanced: "b", deep: "c" },
+	);
+	assert.deepEqual(normalizeTierConfig({ fast: "x" }), { fast: "x" });
+	assert.deepEqual(normalizeTierConfig({ auto: false }), { auto: false });
+});
+
+test("normalizeTierConfig trims strings and drops non-string levels", () => {
+	assert.deepEqual(normalizeTierConfig({ fast: "  claude-haiku-4-5 ", balanced: 42 }), {
+		fast: "claude-haiku-4-5",
+	});
+});
+
+test("normalizeTierConfig returns undefined for missing, empty, or malformed config", () => {
+	assert.equal(normalizeTierConfig(undefined), undefined);
+	assert.equal(normalizeTierConfig(null), undefined);
+	assert.equal(normalizeTierConfig("auto"), undefined);
+	assert.equal(normalizeTierConfig([]), undefined);
+	assert.equal(normalizeTierConfig({}), undefined);
+	assert.equal(normalizeTierConfig({ auto: "yes" }), undefined);
+	assert.equal(normalizeTierConfig({ deep: "" }), undefined);
+});
+
+test("isTierLevel accepts only fast, balanced, deep", () => {
+	assert.equal(isTierLevel("fast"), true);
+	assert.equal(isTierLevel("balanced"), true);
+	assert.equal(isTierLevel("deep"), true);
+	assert.equal(isTierLevel("mega"), false);
+	assert.equal(isTierLevel(undefined), false);
+	assert.equal(isTierLevel(""), false);
 });
 
 // ── buildChildArgs ───────────────────────────────────────────────────────────

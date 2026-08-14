@@ -74,6 +74,59 @@ What was done.
 ## Notes (if any)
 Anything the parent agent should know.`;
 
+// ── Model tiers ──────────────────────────────────────────────────────────────
+
+export type TierLevel = "fast" | "balanced" | "deep";
+
+export const TIER_LEVELS: readonly TierLevel[] = ["fast", "balanced", "deep"];
+
+/** The `subagent.modelTiers` object from settings.json, normalized. */
+export interface TierConfig {
+	auto?: boolean;
+	fast?: string;
+	balanced?: string;
+	deep?: string;
+}
+
+/** A plain snapshot of a catalog model, built from pi's model registry. */
+export interface CatalogModel {
+	id: string;
+	provider: string;
+	inputCost: number;
+}
+
+export interface ModelResolution {
+	/** Concrete model id to pass to the child; undefined → inherit parent default. */
+	model?: string;
+	/** The tier that produced the model, if any. */
+	tierUsed?: TierLevel;
+	/** Human-readable fallback/collapse note, if any. */
+	note?: string;
+}
+
+export function isTierLevel(value: string | undefined): value is TierLevel {
+	return value !== undefined && (TIER_LEVELS as readonly string[]).includes(value);
+}
+
+/**
+ * Normalize an arbitrary settings.json value into a TierConfig.
+ * Returns undefined when nothing usable is present (feature off).
+ */
+export function normalizeTierConfig(value: unknown): TierConfig | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const src = value as Record<string, unknown>;
+	const cfg: TierConfig = {};
+	if (typeof src.auto === "boolean") cfg.auto = src.auto;
+	for (const level of TIER_LEVELS) {
+		const v = src[level];
+		if (typeof v === "string" && v.trim() !== "") cfg[level] = v.trim();
+	}
+	if (cfg.auto === undefined && cfg.fast === undefined && cfg.balanced === undefined && cfg.deep === undefined) {
+		return undefined;
+	}
+	return cfg;
+}
+
 // ── Agent markdown parsing ───────────────────────────────────────────────────
 
 /**
