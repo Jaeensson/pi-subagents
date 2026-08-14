@@ -56,6 +56,7 @@ export function discoverUserAgents(): AgentSummary[] {
 			description: parsed.description,
 			tools: parsed.tools,
 			model: parsed.model,
+			tier: parsed.tier,
 			systemPrompt: parsed.systemPrompt,
 			source: "user",
 			filePath,
