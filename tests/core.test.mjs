@@ -20,12 +20,14 @@ import {
 	formatElapsed,
 	formatTokens,
 	formatUsageStats,
+	familyStem,
 	getFinalOutput,
 	getResultOutput,
 	isFailedState,
 	normalizeTierConfig,
 	isTierLevel,
 	parseAgentMarkdown,
+	pickAutoTier,
 	resolveAgent,
 	shouldNotify,
 	truncateOutput,
@@ -121,6 +123,70 @@ test("isTierLevel accepts only fast, balanced, deep", () => {
 	assert.equal(isTierLevel("mega"), false);
 	assert.equal(isTierLevel(undefined), false);
 	assert.equal(isTierLevel(""), false);
+});
+
+// ── Model tiers: familyStem / pickAutoTier ───────────────────────────────────
+
+test("familyStem strips date and -latest suffixes and returns the first segment", () => {
+	assert.equal(familyStem("claude-haiku-4-5-20251001"), "claude");
+	assert.equal(familyStem("claude-haiku-4-5-latest"), "claude");
+	assert.equal(familyStem("deepseek-v4-pro"), "deepseek");
+	assert.equal(familyStem("gpt-5.6-luna"), "gpt");
+	assert.equal(familyStem("hy3"), "hy3");
+});
+
+test("pickAutoTier picks same-family cheaper/pricier models around the default", () => {
+	const catalog = [
+		{ id: "claude-haiku-4-5", provider: "anthropic", inputCost: 1 },
+		{ id: "claude-haiku-4-5-20251001", provider: "anthropic", inputCost: 1 },
+		{ id: "claude-sonnet-4-5", provider: "anthropic", inputCost: 3 },
+		{ id: "claude-opus-4-5", provider: "anthropic", inputCost: 15 },
+		{ id: "qwen-whatever", provider: "anthropic", inputCost: 0.5 },
+	];
+	assert.deepEqual(pickAutoTier("fast", { defaultModel: "claude-sonnet-4-5", catalog }), {
+		model: "claude-haiku-4-5",
+	});
+	assert.deepEqual(pickAutoTier("deep", { defaultModel: "claude-sonnet-4-5", catalog }), {
+		model: "claude-opus-4-5",
+	});
+});
+
+test("pickAutoTier collapses deep when no pricier family member exists", () => {
+	const catalog = [
+		{ id: "deepseek-v4-flash", provider: "opencode-go", inputCost: 0.14 },
+		{ id: "deepseek-v4-pro", provider: "opencode-go", inputCost: 0.435 },
+	];
+	assert.deepEqual(pickAutoTier("deep", { defaultModel: "deepseek-v4-pro", catalog }), {
+		model: "deepseek-v4-pro",
+		collapsed: true,
+	});
+});
+
+test("pickAutoTier fast falls back to the provider's cheapest model outside the family", () => {
+	const catalog = [
+		{ id: "gpt-5.4", provider: "opencode-go", inputCost: 2 },
+		{ id: "mini-m3", provider: "opencode-go", inputCost: 1 },
+	];
+	assert.deepEqual(pickAutoTier("fast", { defaultModel: "gpt-5.4", catalog }), {
+		model: "mini-m3",
+		outsideFamily: true,
+	});
+});
+
+test("pickAutoTier fast collapses when the default is already cheapest", () => {
+	const catalog = [
+		{ id: "gpt-5.4", provider: "opencode-go", inputCost: 2 },
+		{ id: "kimi-k3", provider: "opencode-go", inputCost: 3 },
+	];
+	assert.deepEqual(pickAutoTier("fast", { defaultModel: "gpt-5.4", catalog }), {
+		model: "gpt-5.4",
+		collapsed: true,
+	});
+});
+
+test("pickAutoTier returns nothing for missing defaults or unknown models", () => {
+	assert.deepEqual(pickAutoTier("fast", { defaultModel: undefined, catalog: [] }), {});
+	assert.deepEqual(pickAutoTier("deep", { defaultModel: "llama3.1:8b", catalog: [] }), {});
 });
 
 // ── buildChildArgs ───────────────────────────────────────────────────────────

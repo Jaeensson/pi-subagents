@@ -127,6 +127,61 @@ export function normalizeTierConfig(value: unknown): TierConfig | undefined {
 	return cfg;
 }
 
+/** Result of the auto-picker for one tier. */
+export interface AutoPick {
+	model?: string;
+	/** The pick equals the default model (tier collapsed). */
+	collapsed?: boolean;
+	/** The pick is outside the default model's family (fast fallback only). */
+	outsideFamily?: boolean;
+}
+
+/**
+ * Family stem of a model id: the first `-`-separated segment after stripping
+ * trailing `-YYYYMMDD` date suffixes and `-latest`. Brand families keep
+ * provider trios together (`claude-haiku-4-5`, `claude-sonnet-4-5` and
+ * `claude-opus-4-5` all belong to `claude`).
+ */
+export function familyStem(id: string): string {
+	let stem = id.replace(/-\d{8}$/, "");
+	stem = stem.replace(/-latest$/i, "");
+	return stem.split("-")[0];
+}
+
+/**
+ * Pick a model for a fast/deep tier from the catalog, relative to the
+ * default model. Cost-ranked within the default model's family; cost ties
+ * prefer the canonical (shorter) id so dated duplicates lose.
+ */
+export function pickAutoTier(
+	level: "fast" | "deep",
+	options: { defaultModel?: string; catalog: CatalogModel[] },
+): AutoPick {
+	const { defaultModel, catalog } = options;
+	if (!defaultModel) return {};
+	const def = catalog.find((m) => m.id === defaultModel);
+	if (!def) return {};
+	const family = catalog.filter(
+		(m) => m.provider === def.provider && familyStem(m.id) === familyStem(def.id),
+	);
+	const byCost = (models: CatalogModel[]) =>
+		[...models].sort((a, b) => a.inputCost - b.inputCost || a.id.length - b.id.length);
+	if (level === "fast") {
+		const cheaper = byCost(family).filter((m) => m.inputCost < def.inputCost);
+		if (cheaper.length > 0) return { model: cheaper[0].id };
+		const providerModels = byCost(catalog.filter((m) => m.provider === def.provider));
+		const pick = providerModels[0];
+		if (!pick) return {};
+		if (pick.id === def.id) return { model: pick.id, collapsed: true };
+		return { model: pick.id, outsideFamily: true };
+	}
+	const pricier = byCost(family)
+		.filter((m) => m.inputCost > def.inputCost)
+		.reverse();
+	if (pricier.length > 0) return { model: pricier[0].id };
+	return { model: def.id, collapsed: true };
+}
+
 // ── Agent markdown parsing ───────────────────────────────────────────────────
 
 /**
