@@ -576,6 +576,12 @@ test("formatUsageStats returns empty string for empty usage", () => {
 	assert.equal(formatUsageStats({}), "");
 });
 
+test("formatUsageStats appends the tier to the model when given", () => {
+	assert.ok(formatUsageStats({ turns: 1 }, "claude-opus-4-5", "deep").includes("claude-opus-4-5 (tier: deep)"));
+	assert.ok(formatUsageStats({ turns: 1 }, "claude-opus-4-5").includes("claude-opus-4-5"));
+	assert.equal(formatUsageStats({ turns: 1 }, undefined, "deep"), "1 turn");
+});
+
 // ── formatElapsed ─────────────────────────────────────────────────────────────
 
 test("formatElapsed formats sub-minute durations as seconds", () => {
@@ -712,4 +718,23 @@ test("formatStatusReport caps final output at maxOutputBytes", () => {
 	);
 	assert.ok(report.includes("[Output truncated:"));
 	assert.ok(!report.includes("y".repeat(200)));
+});
+
+test("formatStatusReport shows the used tier and fallback notes", () => {
+	const report = formatStatusReport([
+		{
+			id: "b",
+			agent: "planner",
+			status: "completed",
+			task: "plan",
+			exitCode: 0,
+			messages: [],
+			usage: { ...emptyUsage(), turns: 2 },
+			model: "claude-opus-4-5",
+			tierUsed: "deep",
+			tierNote: 'tier "deep" collapsed to the default model',
+		},
+	]);
+	assert.ok(report.includes("claude-opus-4-5 (tier: deep)"));
+	assert.ok(report.includes('Note: tier "deep" collapsed'));
 });

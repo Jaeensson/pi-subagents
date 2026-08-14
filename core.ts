@@ -460,6 +460,7 @@ export function formatElapsed(seconds: number): string {
 export function formatUsageStats(
 	usage: Partial<UsageStats>,
 	model?: string,
+	tier?: string,
 ): string {
 	const parts: string[] = [];
 	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
@@ -471,7 +472,7 @@ export function formatUsageStats(
 	if (usage.contextTokens && usage.contextTokens > 0) {
 		parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
 	}
-	if (model) parts.push(model);
+	if (model) parts.push(tier ? `${model} (tier: ${tier})` : model);
 	return parts.join(" ");
 }
 
@@ -544,6 +545,8 @@ export function formatStatusReport(
 		messages: MessageLike[];
 		usage: UsageStats;
 		model?: string;
+		tierUsed?: string;
+		tierNote?: string;
 		errorMessage?: string;
 	}>,
 	opts: { maxOutputBytes?: number } = {},
@@ -556,8 +559,9 @@ export function formatStatusReport(
 		if (t.status === "running") {
 			lines.push("(running, no output yet)");
 		} else {
-			const usageStr = formatUsageStats(t.usage, t.model);
+			const usageStr = formatUsageStats(t.usage, t.model, t.tierUsed);
 			if (usageStr) lines.push(usageStr);
+			if (t.tierNote) lines.push(`Note: ${t.tierNote}`);
 			if (t.status !== "completed") {
 				lines.push(`Error: ${t.errorMessage || "(no error message)"}`);
 			}
