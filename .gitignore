@@ -1,6 +1,9 @@
 # Dev-only dependency linkage (nix store symlinks) — see README "Development"
 node_modules/
 
+# Lockfile is a byproduct of the nix-store symlink tree; packages.json has no deps
+package-lock.json
+
 # direnv / nix-direnv cache
 .direnv/
 
