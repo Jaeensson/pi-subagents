@@ -514,6 +514,33 @@ export function shouldNotify(wait: boolean, notifyOnComplete: boolean): boolean 
 	return !wait && notifyOnComplete;
 }
 
+/**
+ * Structured summary passed alongside the notification text so the TUI card
+ * renderer can header the message without parsing markdown.
+ */
+export interface CompletionDetails {
+	total: number;
+	failed: number;
+}
+
+/**
+ * Header for the completion card. `failed` counts tasks that did not end in
+ * "completed" (failed or aborted). A batch with zero tasks is a plain failure.
+ */
+export function completionHeader(summary: {
+	total: number;
+	failed: number;
+}): { kind: "success" | "error"; text: string } {
+	if (summary.total === 0) {
+		return { kind: "error", text: "✗ Subagent batch failed" };
+	}
+	const noun = summary.total === 1 ? "subagent" : "subagents";
+	if (summary.failed > 0) {
+		return { kind: "error", text: `✗ ${summary.total} ${noun} finished — ${summary.failed} failed` };
+	}
+	return { kind: "success", text: `✓ ${summary.total} ${noun} finished` };
+}
+
 export function formatCompletionNotification(
 	tasks: Array<{
 		agent: string;

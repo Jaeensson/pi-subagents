@@ -7,9 +7,9 @@
  */
 
 import * as os from "node:os";
-import { truncateToWidth, type TUI } from "@earendil-works/pi-tui";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { formatElapsed, type MessageLike } from "./core.ts";
+import { Box, Text, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { completionHeader, formatElapsed, type CompletionDetails, type MessageLike } from "./core.ts";
 import { getRunningCount, jobs, tasks, type Task } from "./runtime.ts";
 
 export type DisplayItem =
@@ -108,6 +108,48 @@ export function renderTaskList(tasks: DisplayItem[], limit: number, theme: any):
 		}
 	}
 	return text.trimEnd();
+}
+
+// ── Completion card ──────────────────────────────────────────────────────────
+//
+// Background-batch notifications are sent as custom messages (not
+// sendUserMessage) so pi does not label them "Steering: ...". A registered
+// message renderer draws them as a distinct card that reads as finished:
+//
+//   ✓ 2 subagents finished                    ← colored by outcome
+//   - ✓ [scout] found the config
+//   - ✓ [planner] step 2 done
+//   Full results available via subagent_wait (jobIds: …)
+//
+// Collapsed shows the per-agent lines + footer; expanding shows the full text.
+
+/** Custom message type for background batch completion cards. */
+export const COMPLETION_MESSAGE_TYPE = "subagent-batch-finished";
+
+/** Register the completion-card renderer (extension entry, once at load). */
+export function registerCompletionRenderer(pi: ExtensionAPI): void {
+	pi.registerMessageRenderer<CompletionDetails>(COMPLETION_MESSAGE_TYPE, (message, { expanded, outputPad }, theme) => {
+		const details = message.details ?? { total: 0, failed: 0 };
+		const { kind, text } = completionHeader(details);
+		const accent = kind === "success" ? "success" : "error";
+		const content = typeof message.content === "string" ? message.content : "";
+
+		const box = new Box(outputPad, 1, (line) => theme.bg("customMessageBg", line));
+		box.addChild(new Text(theme.fg(accent, text), 0, 0));
+		box.addChild(new Text(completionBody(content, expanded), 0, 0));
+		return box;
+	});
+}
+
+/** Collapsed: the per-agent ✓/✗ lines and footer; expanded: the full summary text. */
+function completionBody(content: string, expanded: boolean): string {
+	const text = content.trim();
+	if (expanded) return text;
+	return text
+		.split("\n")
+		.map((l) => l.trimEnd())
+		.filter((l) => l.trim() !== "" && !l.trim().startsWith("#"))
+		.join("\n");
 }
 
 // ── Persistent status widget ────────────────────────────────────────────────

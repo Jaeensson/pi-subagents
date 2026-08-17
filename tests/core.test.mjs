@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import {
 	applyEventLine,
 	buildChildArgs,
+	completionHeader,
 	DEFAULT_AGENT_SYSTEM_PROMPT,
 	displayAgentName,
 	formatCompletionNotification,
@@ -737,4 +738,34 @@ test("formatStatusReport shows the used tier and fallback notes", () => {
 	]);
 	assert.ok(report.includes("claude-opus-4-5 (tier: deep)"));
 	assert.ok(report.includes('Note: tier "deep" collapsed'));
+});
+
+// ── completionHeader ─────────────────────────────────────────────────────────
+
+test("completionHeader: all tasks completed is a success header with plural count", () => {
+	assert.deepEqual(completionHeader({ total: 3, failed: 0 }), {
+		kind: "success",
+		text: "✓ 3 subagents finished",
+	});
+});
+
+test("completionHeader: single completed task uses singular form", () => {
+	assert.deepEqual(completionHeader({ total: 1, failed: 0 }), {
+		kind: "success",
+		text: "✓ 1 subagent finished",
+	});
+});
+
+test("completionHeader: any failed task yields an error header with the failure count", () => {
+	assert.deepEqual(completionHeader({ total: 3, failed: 1 }), {
+		kind: "error",
+		text: "✗ 3 subagents finished — 1 failed",
+	});
+});
+
+test("completionHeader: a batch with no tasks reports a plain failure", () => {
+	assert.deepEqual(completionHeader({ total: 0, failed: 0 }), {
+		kind: "error",
+		text: "✗ Subagent batch failed",
+	});
 });

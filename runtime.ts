@@ -15,6 +15,7 @@ import {
 	formatCompletionNotification,
 	getResultOutput,
 	type CatalogModel,
+	type CompletionDetails,
 	type MessageLike,
 	type TierConfig,
 	type UsageStats,
@@ -137,12 +138,12 @@ export function clearRegistry(): void {
 
 // ── Completion notification hook ─────────────────────────────────────────────
 //
-// The extension entry installs the real sender (api.sendUserMessage) via
+// The extension entry installs the real sender (api.sendMessage) via
 // setMessageSender; kept as a hook so runtime.ts stays free of pi imports.
 
-let sendMessage: ((text: string) => void) | undefined;
+let sendMessage: ((text: string, details: CompletionDetails) => void) | undefined;
 
-export function setMessageSender(fn: (text: string) => void): void {
+export function setMessageSender(fn: (text: string, details: CompletionDetails) => void): void {
 	sendMessage = fn;
 }
 
@@ -264,7 +265,10 @@ function maybeNotifyJob(job: Job) {
 		);
 	}
 	try {
-		sendMessage?.(text);
+		sendMessage?.(text, {
+			total: job.tasks.length,
+			failed: job.tasks.filter((t) => t.status !== "completed").length,
+		});
 	} catch {
 		/* ignore: session may be shutting down */
 	}

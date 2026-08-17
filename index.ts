@@ -32,7 +32,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { killTask } from "./process.ts";
 import { clearRegistry, listRunningTasks, setMessageSender } from "./runtime.ts";
-import { disposeWidget, setUi } from "./tui.ts";
+import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, setUi } from "./tui.ts";
 import { subagentAgentsTool } from "./tools/subagent-agents.ts";
 import { subagentStatusTool } from "./tools/subagent-status.ts";
 import { subagentWaitTool } from "./tools/subagent-wait.ts";
@@ -43,9 +43,17 @@ let api: ExtensionAPI;
 
 export default function (pi: ExtensionAPI) {
 	api = pi;
-	setMessageSender((text) => {
-		void api.sendUserMessage(text, { deliverAs: "steer" });
+	// Completion notifications go out as custom messages (rendered as a
+	// "finished" card, not a "Steering: ..." user message) but keep the
+	// same delivery timing and still trigger a turn, matching the old
+	// sendUserMessage behavior.
+	setMessageSender((text, details) => {
+		api.sendMessage(
+			{ customType: COMPLETION_MESSAGE_TYPE, content: text, display: true, details },
+			{ triggerTurn: true, deliverAs: "steer" },
+		);
 	});
+	registerCompletionRenderer(pi);
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
