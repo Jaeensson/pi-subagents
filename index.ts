@@ -56,7 +56,7 @@ export default function (pi: ExtensionAPI) {
 	});
 	registerCompletionRenderer(pi);
 
-	// Seed bundled default agents (scout, researcher, worker) into
+	// Seed bundled default agents (scout, researcher, worker, reviewer) into
 	// ~/.pi/agent/agents when missing — existing user files always win.
 	seedBundledAgents();
 

@@ -108,8 +108,8 @@ You are a scout agent. Find information quickly and report it compactly.
   reload; rename or customize it to keep your own version. An agent's `tier`
   is its *default*: a `tier` passed on the call (single/parallel/chain)
   always overrides it.
-- Sample agents (planner, reviewer) also ship with pi in
-  `examples/extensions/subagent/agents/` — copy them over if you want them.
+- A sample `planner` agent also ships with pi in
+  `examples/extensions/subagent/agents/` — copy it over if you want it.
 
 ## Model tiers
 
