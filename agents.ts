@@ -3,8 +3,9 @@
  *
  * Agents live in `~/.pi/agent/agents/*.md` (via `getAgentDir()`), the same
  * convention as pi's own user-level resource directories. The package bundles
- * default agents in `agents/*.md` (scout, researcher, worker) that are seeded
- * into the user directory on load when missing — user files always win.
+ * default agents in `agents/*.md` (scout, researcher, worker, reviewer) that
+ * are seeded into the user directory on load when missing — user files always
+ * win.
  *
  *   ---
  *   name: scout

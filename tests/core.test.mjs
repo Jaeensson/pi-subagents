@@ -835,7 +835,7 @@ test("planAgentSeeds: nothing to seed when everything exists", () => {
 // ── Bundled default agents ───────────────────────────────────────────────────
 
 test("bundled agents declare their default tiers", () => {
-	const expected = { scout: "fast", researcher: "deep", worker: "balanced" };
+	const expected = { scout: "fast", researcher: "deep", worker: "balanced", reviewer: "deep" };
 	for (const [name, tier] of Object.entries(expected)) {
 		const agent = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, `${name}.md`), "utf-8"));
 		assert.equal(agent?.tier, tier, `${name} must default to tier "${tier}"`);
@@ -843,9 +843,9 @@ test("bundled agents declare their default tiers", () => {
 	}
 });
 
-test("bundled agents: worker, researcher, and scout ship in agents/", () => {
+test("bundled agents: reviewer, worker, researcher, and scout ship in agents/", () => {
 	const files = bundledAgentFiles();
-	for (const expected of ["researcher.md", "scout.md", "worker.md"]) {
+	for (const expected of ["researcher.md", "reviewer.md", "scout.md", "worker.md"]) {
 		assert.ok(files.includes(expected), `missing bundled agent ${expected}`);
 	}
 });
