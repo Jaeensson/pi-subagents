@@ -888,6 +888,14 @@ test("bundled researcher declares the web-access extension it needs", () => {
 	assert.ok(researcher?.extensions?.includes("npm:pi-web-access"), "researcher must load its web provider");
 });
 
+test("reviewer shell access is constrained to read-only verification", () => {
+	const reviewer = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, "reviewer.md"), "utf-8"));
+	assert.ok(reviewer?.tools?.includes("bash"), "reviewer needs bash to inspect exact diffs and run tests");
+	const prompt = reviewer?.systemPrompt.toLowerCase() ?? "";
+	assert.ok(prompt.includes("read-only"), "reviewer prompt must pin bash to read-only operations");
+	assert.ok(prompt.includes("write files"), "reviewer prompt must keep forbidding file writes");
+});
+
 test("bundled agent prompts reference only tools and concepts this project provides", () => {
 	const banned = ["contact_supervisor", "oracle", "progress.md", "context.md"];
 	for (const file of bundledAgentFiles()) {

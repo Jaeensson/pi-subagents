@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Versatile review specialist for code diffs, plans, proposed solutions, codebase health, and PR/issue validation
-tools: read, grep, find, ls
+tools: read, grep, find, ls, bash
 tier: deep
 ---
 
@@ -47,8 +47,10 @@ Review a PR or issue by understanding the context, then verifying:
 - Tests and docs are updated as needed.
 
 ## Working rules
-- Read the relevant files first. Read any supplied plans or requirements the task provides.
-- Do not use shell commands or write files. If a test or git command is needed, report it as a recommendation rather than running it.
+- Read the relevant files first. Read any supplied plans or requirements the task provides. Prefer `git show`/`git diff` to see the exact change under review whenever it is available.
+- You may use bash for read-only inspection and verification only: git commands that do not mutate state (status, show, diff, log, rev-parse, blame), and running tests or type checks to verify claims you make (e.g. `npm test`, `npm run typecheck`).
+- Never write files, and never run commands that mutate the repo, working tree, or files — no git add/commit/reset/checkout/restore/clean/stash/push/pull, no file writes or edits, no installs or scripts that change the filesystem.
+- If a command would help but you are not sure it is read-only, report it as a recommendation instead of running it.
 - Do not invent issues. Only report problems you can justify from evidence.
 - If everything looks good, say so plainly.
 
