@@ -28,7 +28,7 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   - `tools/*.ts` — one file per registered tool (`defineTool`)
 - Keep the dependency graph acyclic: runtime → process → jobs → tools;
   tui depends only on runtime + core.
-- `agents.ts` discovers agent definitions from `~/.pi/agent/agents/*.md`.
+- `agents.ts` discovers agent definitions from `~/.pi/agent/agents/*.md` and seeds the bundled defaults (`agents/*.md`: scout, researcher, worker) into that directory on load when missing.
 - Agent files: YAML frontmatter (`name`, `description` required; `tools`,
   `model`, `tier` optional) + markdown system prompt body. `tier` is
   `fast | balanced | deep`, resolved via `subagent.modelTiers` in pi's

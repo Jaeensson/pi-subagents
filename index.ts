@@ -31,6 +31,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { killTask } from "./process.ts";
+import { seedBundledAgents } from "./agents.ts";
 import { clearRegistry, listRunningTasks, setMessageSender } from "./runtime.ts";
 import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, setUi } from "./tui.ts";
 import { subagentAgentsTool } from "./tools/subagent-agents.ts";
@@ -54,6 +55,10 @@ export default function (pi: ExtensionAPI) {
 		);
 	});
 	registerCompletionRenderer(pi);
+
+	// Seed bundled default agents (scout, researcher, worker) into
+	// ~/.pi/agent/agents when missing — existing user files always win.
+	seedBundledAgents();
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;

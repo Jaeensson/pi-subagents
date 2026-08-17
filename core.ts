@@ -515,6 +515,16 @@ export function shouldNotify(wait: boolean, notifyOnComplete: boolean): boolean 
 }
 
 /**
+ * Which bundled default agents are missing from the user's agent directory.
+ * User files always win: an existing agent with the same name is never
+ * overwritten, so it is not "missing".
+ */
+export function planAgentSeeds(bundledNames: string[], existingNames: string[]): string[] {
+	const existing = new Set(existingNames);
+	return bundledNames.filter((n) => !existing.has(n));
+}
+
+/**
  * Structured summary passed alongside the notification text so the TUI card
  * renderer can header the message without parsing markdown.
  */

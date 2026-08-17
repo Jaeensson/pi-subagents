@@ -10,6 +10,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import * as path from "node:path";
 import {
 	applyEventLine,
 	buildChildArgs,
@@ -29,11 +32,18 @@ import {
 	isTierLevel,
 	parseAgentMarkdown,
 	pickAutoTier,
+	planAgentSeeds,
 	resolveAgent,
 	resolveModel,
 	shouldNotify,
 	truncateOutput,
 } from "../core.ts";
+
+// Bundled default agents ship in the repo under agents/ and are seeded into
+// the user agent dir when missing (user files always win). These tests keep
+// them parseable and restricted to the supported frontmatter schema.
+const bundledAgentsDir = fileURLToPath(new URL("../agents/", import.meta.url));
+const bundledAgentFiles = () => readdirSync(bundledAgentsDir).filter((f) => f.endsWith(".md")).sort();
 
 const emptyUsage = () => ({
 	input: 0,
@@ -768,4 +778,78 @@ test("completionHeader: a batch with no tasks reports a plain failure", () => {
 		kind: "error",
 		text: "✗ Subagent batch failed",
 	});
+});
+
+// ── planAgentSeeds ───────────────────────────────────────────────────────────
+
+test("planAgentSeeds: empty user dir seeds every bundled agent", () => {
+	assert.deepEqual(planAgentSeeds(["worker", "researcher", "scout"], []), ["worker", "researcher", "scout"]);
+});
+
+test("planAgentSeeds: seeds only the missing agents", () => {
+	assert.deepEqual(planAgentSeeds(["worker", "researcher", "scout"], ["scout"]), ["worker", "researcher"]);
+	assert.deepEqual(planAgentSeeds(["worker", "researcher", "scout"], ["scout", "worker"]), ["researcher"]);
+});
+
+test("planAgentSeeds: nothing to seed when everything exists", () => {
+	assert.deepEqual(planAgentSeeds(["worker", "researcher", "scout"], ["scout", "worker", "researcher"]), []);
+});
+
+// ── Bundled default agents ───────────────────────────────────────────────────
+
+test("bundled agents: worker, researcher, and scout ship in agents/", () => {
+	const files = bundledAgentFiles();
+	for (const expected of ["researcher.md", "scout.md", "worker.md"]) {
+		assert.ok(files.includes(expected), `missing bundled agent ${expected}`);
+	}
+});
+
+test("bundled agents parse with the existing parser and match their filename", () => {
+	for (const file of bundledAgentFiles()) {
+		const agent = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, file), "utf-8"));
+		assert.ok(agent, `${file} must parse as a valid agent`);
+		assert.equal(agent.name, file.replace(/\.md$/, ""), `${file} name must match filename`);
+		assert.ok(agent.description, `${file} needs a description`);
+		assert.ok(agent.systemPrompt.length > 0, `${file} needs a system prompt body`);
+	}
+});
+
+test("bundled agents use only the supported frontmatter keys", () => {
+	const supported = new Set(["name", "description", "tools", "model", "tier"]);
+	for (const file of bundledAgentFiles()) {
+		const content = readFileSync(path.join(bundledAgentsDir, file), "utf-8");
+		const lines = content.split("\n");
+		let end = 1;
+		for (let i = 1; i < lines.length; i++) {
+			if (lines[i].trim() === "---") {
+				end = i;
+				break;
+			}
+		}
+		const keys = lines
+			.slice(1, end)
+			.map((l) => l.trim())
+			.filter(Boolean)
+			.map((l) => l.slice(0, l.indexOf(":")).trim());
+		for (const key of keys) {
+			assert.ok(supported.has(key), `${file} uses unsupported frontmatter key "${key}"`);
+		}
+	}
+});
+
+test("bundled agent prompts reference only tools and concepts this project provides", () => {
+	const banned = ["contact_supervisor", "oracle", "progress.md", "context.md"];
+	for (const file of bundledAgentFiles()) {
+		const content = readFileSync(path.join(bundledAgentsDir, file), "utf-8").toLowerCase();
+		for (const term of banned) {
+			assert.ok(!content.includes(term), `${file} must not reference "${term}" (not provided by this project)`);
+		}
+	}
+	// Worker must actually be able to edit; researcher must get the web tools.
+	const worker = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, "worker.md"), "utf-8"));
+	assert.ok(worker?.tools?.includes("edit") && worker.tools.includes("write"));
+	const researcher = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, "researcher.md"), "utf-8"));
+	for (const tool of ["web_search", "fetch_content", "get_search_content"]) {
+		assert.ok(researcher?.tools?.includes(tool), `researcher must include ${tool}`);
+	}
 });

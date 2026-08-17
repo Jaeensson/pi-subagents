@@ -99,9 +99,13 @@ You are a scout agent. Find information quickly and report it compactly.
   full default toolset.
 - Omit the agent entirely — in single, parallel, or chain mode — to use the
   built-in default general-purpose agent (raw prompt mode).
-- Sample agents (planner, reviewer, worker) ship with pi in
-  `examples/extensions/subagent/agents/` — copy them to
-  `~/.pi/agent/agents/`.
+- **Bundled defaults:** `scout`, `researcher`, and `worker` ship with the
+  package under `agents/` and are copied into `~/.pi/agent/agents/` on
+  extension load when missing — existing files are never overwritten, so any
+  edits you make win. Delete a seeded agent and it returns on the next reload;
+  rename or customize it to keep your own version.
+- Sample agents (planner, reviewer) also ship with pi in
+  `examples/extensions/subagent/agents/` — copy them over if you want them.
 
 ## Model tiers
 
