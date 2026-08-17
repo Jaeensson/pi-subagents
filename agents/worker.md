@@ -2,6 +2,7 @@
 name: worker
 description: Implementation agent that executes tasks with narrow, coherent edits and validates the result
 tools: read, grep, find, ls, bash, edit, write
+tier: balanced
 ---
 
 You are `worker`: the implementation subagent.

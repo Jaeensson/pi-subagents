@@ -797,6 +797,15 @@ test("planAgentSeeds: nothing to seed when everything exists", () => {
 
 // ── Bundled default agents ───────────────────────────────────────────────────
 
+test("bundled agents declare their default tiers", () => {
+	const expected = { scout: "fast", researcher: "deep", worker: "balanced" };
+	for (const [name, tier] of Object.entries(expected)) {
+		const agent = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, `${name}.md`), "utf-8"));
+		assert.equal(agent?.tier, tier, `${name} must default to tier "${tier}"`);
+		assert.ok(isTierLevel(agent?.tier), `${name} tier must be a valid level`);
+	}
+});
+
 test("bundled agents: worker, researcher, and scout ship in agents/", () => {
 	const files = bundledAgentFiles();
 	for (const expected of ["researcher.md", "scout.md", "worker.md"]) {
