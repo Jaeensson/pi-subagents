@@ -9,43 +9,17 @@ The parent session can either **wait** for subagents (synchronous) or keep
 
 ## Installation
 
-Install directly from the git repo as a pi package, then reload pi (`/reload`):
+Install as a pi package, then reload pi (`/reload`):
 
 ```bash
 pi install https://github.com/Jaeensson/pi-subagents
 ```
 
-While the repo is private, or if you use SSH keys, install via SSH instead:
+Update with `pi update --extensions` (or `--all`), then `/reload`. For a
+single project only, pass `-l` (writes to `.pi/settings.json`).
 
-```bash
-pi install git:git@github.com:Jaeensson/pi-subagents
-```
-
-Update to the latest version:
-
-```bash
-pi update --extensions   # or: pi update --all
-# then /reload
-```
-
-Install for a single project only (`-l` writes to `.pi/settings.json`):
-
-```bash
-pi install -l https://github.com/Jaeensson/pi-subagents
-```
-
-Alternatively, for local development, copy or symlink the repo into
-`~/.pi/agent/extensions/`:
-
-```bash
-# Option A: copy
-cp -R pi-subagents ~/.pi/agent/extensions/subagent
-
-# Option B: symlink (single source of truth — edits in the repo take effect after /reload)
-ln -sfn "$(pwd)/pi-subagents" ~/.pi/agent/extensions/subagent
-```
-
-Agent definitions go in `~/.pi/agent/agents/*.md` (see [Agent definitions](#agent-definitions)).
+Agent definitions live in `~/.pi/agent/agents/*.md` (see
+[Agent definitions](#agent-definitions)).
 
 ## Tools
 
@@ -72,34 +46,28 @@ Use subagent { tasks: [{ agent: "scout", task: "Find models" }, { task: "Find pr
 Use subagent { chain: [{ agent: "scout", task: "Find the read tool" }, { task: "Improve it: {previous}" }], wait: true }
 
 # Asynchronous — parent keeps working while subagents run in the background
-# 1. Spawn:  subagent { agent: "scout", task: "...", wait: false }   → returns jobId
-# 2. Later:  subagent_status { jobIds: ["..."] }                     → peek at progress
-# 3. Collect: subagent_wait { jobIds: ["..."] }                      → full results
+# 1. Spawn:   subagent { agent: "scout", task: "...", wait: false }   → returns jobId
+# 2. Later:   subagent_status { jobIds: ["..."] }                     → peek at progress
+# 3. Collect: subagent_wait { jobIds: ["..."] }                       → full results
 ```
 
-### Async mode details
+### Async details
 
-- Spawning with `wait: false` returns immediately with a `jobId`. The parent can
-  continue its own turn — pi runs sibling tool calls concurrently, so e.g. a
-  `bash` call in the same message runs while the subagent works.
-- When **all** tasks in a spawned batch finish, the extension injects **one
-  compact summary message** into the conversation (`✓ [scout] <preview>` per
-  task). The parent picks it up on its next turn automatically. Set
-  `notifyOnComplete: false` to suppress this and poll with
-  `subagent_status` / `subagent_wait` instead.
-- `subagent_wait` blocks until completion (optionally `timeoutSeconds`); results
-  are already cached if the batch finished earlier. Esc during the wait cancels
-  only the wait — background jobs keep running.
-- Esc during a synchronous (`wait: true`) run kills the subagents.
-- All running children are killed on session shutdown (new session, resume,
-  exit). Async work is therefore tied to the current session.
-- Async spawning is designed for interactive sessions — `pi -p` (print mode)
-  exits when the prompt completes and kills background children.
+- When all tasks in a spawned batch finish, the extension injects one compact
+  summary message (`✓ [scout] <preview>` per task). Set `notifyOnComplete:
+  false` to suppress it and poll with `subagent_status` / `subagent_wait`.
+- `subagent_wait` blocks until completion (optionally `timeoutSeconds`);
+  results are cached if the batch already finished. Esc cancels only the wait —
+  background jobs keep running. Esc during a synchronous (`wait: true`) run
+  kills the subagents.
+- Running children are killed on session shutdown (new session, resume, exit),
+  and `pi -p` (print mode) kills them when the prompt completes — async work is
+  tied to the current interactive session.
 
 ### Status widget
 
-While subagents are running, a compact widget appears above the input editor and
-updates live (1s tick):
+While subagents run, a compact widget above the input editor updates live (1s
+tick), showing agent, elapsed time, chain step, and last activity:
 
 ```
 ⏳ 2 subagents running
@@ -107,10 +75,7 @@ updates live (1s tick):
   ▸ planner    4s   step 2/3  "Refactor the core loop"
 ```
 
-Each line shows the agent, elapsed time, chain step (chain mode), and the last
-activity (most recent tool call, latest output, or the task description). The
-widget covers sync and async runs alike; it disappears automatically when
-nothing is running. TUI-only — print/JSON modes are unaffected.
+TUI-only — print/JSON modes are unaffected.
 
 ## Agent definitions
 
@@ -132,13 +97,10 @@ You are a scout agent. Find information quickly and report it compactly.
 - `name` and `description` are required; `tools` (comma-separated), `model`,
   and `tier` (`fast` | `balanced` | `deep`) are optional. Omit `tools` for the
   full default toolset.
-- If both `model` and `tier` are set, `model` wins (a concrete pin beats an
-  abstract tier). A call-time `tier` parameter beats both.
-- Omit the agent entirely when calling `subagent` — in single, parallel, or
-  chain mode — to use the built-in default general-purpose agent (raw prompt
-  mode).
-- More sample agents (planner, reviewer, worker) ship with pi:
-  `examples/extensions/subagent/agents/` inside the pi package — copy them to
+- Omit the agent entirely — in single, parallel, or chain mode — to use the
+  built-in default general-purpose agent (raw prompt mode).
+- Sample agents (planner, reviewer, worker) ship with pi in
+  `examples/extensions/subagent/agents/` — copy them to
   `~/.pi/agent/agents/`.
 
 ## Model tiers
@@ -160,32 +122,21 @@ through a central mapping in pi's `settings.json`:
 }
 ```
 
-- Declare a tier in an agent file (`tier: deep` in frontmatter) and/or pass it
-  per call: `subagent { agent: "scout", task: "...", tier: "fast" }` (also
-  available per item in `tasks` and `chain`).
+- Set a tier in an agent file (`tier: deep`) and/or pass it per call —
+  `subagent { agent: "scout", task: "...", tier: "fast" }` (also per item in
+  `tasks` and `chain`). Explicit per-tier values always win; `auto` fills only
+  unmapped tiers.
 - Resolution precedence per task: call-time `tier` → agent `model` → agent
   `tier` → the parent's default model.
-- Explicit per-tier values always win; `auto: true` fills only unmapped tiers.
-- **Auto-picker:** with `auto: true`, tiers resolve from the model registry
-  relative to your `defaultModel`: `balanced` is always your default model;
-  `fast` is the cheapest model in the same brand family (e.g. `claude-*` /
-  `deepseek-*`), falling back to the provider's cheapest model when the
-  default is already the family's cheapest; `deep` is the priciest family
-  member, or collapses to your default model when nothing bigger exists
-  (deep never jumps to another vendor's family). `enabledModels` scoping is
-  respected.
-- Auto-picked models are passed to subagents provider-qualified (e.g.
-  `opencode-go/gpt-5.6-luna`) to avoid ambiguity when a model id exists on
-  multiple providers. Explicit mappings may also use the `provider/model`
-  form.
-- Without any mapping or `auto`, tiers fall back to the parent's default model
-  (the same behavior as today when no `--model` is passed).
-- Resolved models are reported in results, e.g.
-  `model: claude-opus-4-5 (tier: deep)`, with a `Note:` line when a tier fell
-  back or collapsed.
+- With `auto: true`, tiers resolve relative to your `defaultModel`: `balanced`
+  is always your default model; `fast` is the cheapest model in the same brand
+  family; `deep` is the priciest family member (never jumping to another
+  vendor's family), collapsing to your default when nothing bigger exists.
+  `enabledModels` scoping is respected, and auto-picked models are passed to
+  subagents provider-qualified to avoid ambiguity.
+- Without any mapping or `auto`, tiers fall back to the parent's default model.
 - The mapping lives in the user-level settings file
-  (`~/.pi/agent/settings.json`). Project-local `.pi/settings.json` is not read
-  by the extension.
+  (`~/.pi/agent/settings.json`); project-local `.pi/settings.json` is not read.
 
 ## How it works
 
@@ -193,53 +144,19 @@ Each subagent runs `pi --mode json -p --no-session --no-extensions
 --no-skills --no-prompt-templates` with the agent's system prompt appended and
 the task as the prompt. Children are lean (no extension recursion) and read the
 same user config (model, API keys) as the parent. JSON events from the child's
-stdout are parsed for messages, usage (tokens/cost), and errors.
-
-Background jobs are tracked in an in-memory registry inside the extension
-process; running children are terminated on session shutdown.
+stdout are parsed for messages, usage (tokens/cost), and errors. Background
+jobs are tracked in an in-memory registry inside the extension process.
 
 ## Development
 
 ```bash
 cd ~/.pi/agent/extensions/subagent
 npm test                    # node:test — pure logic in core.ts (no pi deps needed)
-npm run typecheck           # tsc --noEmit (needs dev node_modules, see below)
+npm run typecheck           # tsc --noEmit
 ```
 
-`core.ts` is dependency-free by design and unit-tested with the built-in node
-test runner (Node >= 22.6 type stripping).
-
-The `node_modules/` directory contains symlinks into the nix store copy of the
-installed pi package, used only for typechecking — pi itself resolves the
-`@earendil-works/*` packages at runtime. Re-link after updating pi:
-
-```bash
-STORE=$(readlink -f /run/current-system/sw/bin/pi | sed 's|/bin/pi$||')/lib/node_modules/pi-monorepo
-cd ~/.pi/agent/extensions/subagent
-mkdir -p node_modules/@earendil-works
-ln -sfn $STORE node_modules/@earendil-works/pi-coding-agent
-ln -sfn $STORE/node_modules/@earendil-works/pi-ai node_modules/@earendil-works/pi-ai
-ln -sfn $STORE/node_modules/@earendil-works/pi-tui node_modules/@earendil-works/pi-tui
-ln -sfn $STORE/node_modules/@earendil-works/pi-agent-core node_modules/@earendil-works/pi-agent-core
-ln -sfn $STORE/node_modules/typebox node_modules/typebox
-```
-
-## Files
-
-```
-~/.pi/agent/extensions/subagent/
-├── index.ts            # entry: session hooks + tool registration
-├── runtime.ts          # task/job registry, waiters, completion checks
-├── process.ts          # child pi process lifecycle (spawn/kill/finalize)
-├── jobs.ts             # job orchestration: chain runner, results, model context
-├── tui.ts              # TUI rendering helpers + status widget
-├── agents.ts           # agent discovery from ~/.pi/agent/agents
-├── core.ts             # pure logic: parsing, event handling, formatting, truncation
-├── tools/              # one file per registered tool
-│   ├── subagent.ts
-│   ├── subagent-wait.ts
-│   ├── subagent-status.ts
-│   └── subagent-agents.ts
-└── tests/
-    └── core.test.mjs   # node:test suite
-```
+`core.ts` is dependency-free by design and tested with the built-in node test
+runner (Node >= 22.6 type stripping). `node_modules/` contains symlinks into
+the nix-store copy of pi, used only for typechecking — re-link them after a pi
+update. For local development, symlink the repo into
+`~/.pi/agent/extensions/subagent` and `/reload` after changes.
