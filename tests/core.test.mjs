@@ -62,7 +62,7 @@ test("parseAgentMarkdown parses frontmatter and body", () => {
 name: scout
 description: Fast codebase recon
 tools: read, grep, find, ls, bash
-model: claude-haiku-4-5
+tier: fast
 ---
 
 You are a scout. Report findings.`;
@@ -71,8 +71,33 @@ You are a scout. Report findings.`;
 	assert.equal(agent.name, "scout");
 	assert.equal(agent.description, "Fast codebase recon");
 	assert.deepEqual(agent.tools, ["read", "grep", "find", "ls", "bash"]);
-	assert.equal(agent.model, "claude-haiku-4-5");
+	assert.equal(agent.tier, "fast");
 	assert.equal(agent.systemPrompt, "You are a scout. Report findings.");
+});
+
+test("parseAgentMarkdown parses the extensions list", () => {
+	const agent = parseAgentMarkdown(`---
+name: researcher
+description: Web research
+tools: read, web_search
+extensions: npm:pi-web-access
+---
+body`);
+	assert.deepEqual(agent?.extensions, ["npm:pi-web-access"]);
+});
+
+test("parseAgentMarkdown ignores the model key (tier is the only model control)", () => {
+	const agent = parseAgentMarkdown(`---
+name: researcher
+description: Web research
+tools: read, web_search
+model: claude-haiku-4-5
+tier: deep
+---
+body`);
+	assert.ok(agent);
+	assert.equal(agent.model, undefined);
+	assert.equal(agent.tier, "deep");
 });
 
 test("parseAgentMarkdown returns null without frontmatter or required fields", () => {
@@ -303,19 +328,7 @@ test("resolveModel reports deep collapse through auto", () => {
 	assert.ok(r.note?.includes("collapsed"));
 });
 
-test("resolveModel agent model beats agent tier when no call tier is given", () => {
-	assert.deepEqual(
-		resolveModel({
-			agentModel: "claude-opus-4-5",
-			agentTier: "fast",
-			tierConfig: { fast: "claude-haiku-4-5" },
-			catalog: tierCatalog,
-		}),
-		{ model: "claude-opus-4-5", note: undefined },
-	);
-});
-
-test("resolveModel resolves the agent tier when no call tier or agent model applies", () => {
+test("resolveModel resolves the agent tier when no call tier applies", () => {
 	assert.deepEqual(
 		resolveModel({ agentTier: "deep", tierConfig: { deep: "claude-opus-4-5" }, catalog: tierCatalog }),
 		{ model: "claude-opus-4-5", tierUsed: "deep", note: undefined },
@@ -353,10 +366,10 @@ test("resolveModel reports auto configured but unresolvable", () => {
 	);
 });
 
-test("resolveModel ignores invalid tier strings and uses the agent model", () => {
+test("resolveModel ignores invalid tier strings and falls through to the agent tier", () => {
 	assert.deepEqual(
-		resolveModel({ callTier: "mega", agentModel: "claude-haiku-4-5", catalog: tierCatalog }),
-		{ model: "claude-haiku-4-5", note: undefined },
+		resolveModel({ callTier: "mega", agentTier: "fast", tierConfig: { fast: "claude-haiku-4-5" }, catalog: tierCatalog }),
+		{ model: "claude-haiku-4-5", tierUsed: "fast", note: undefined },
 	);
 });
 
@@ -377,6 +390,30 @@ test("buildChildArgs builds base args with json mode, no session, no extensions"
 		"--no-prompt-templates",
 		"Task: Do the thing",
 	]);
+});
+
+test("buildChildArgs adds -e flags for extensions while keeping --no-extensions", () => {
+	assert.deepEqual(
+		buildChildArgs({
+			tools: ["read", "web_search"],
+		extensions: ["npm:pi-web-access"],
+			task: "T",
+		}),
+		[
+			"--mode",
+			"json",
+			"-p",
+			"--no-session",
+			"--no-extensions",
+			"--no-skills",
+			"--no-prompt-templates",
+			"-e",
+			"npm:pi-web-access",
+			"--tools",
+			"read,web_search",
+			"Task: T",
+		],
+	);
 });
 
 test("buildChildArgs adds model, tools, and system prompt file in order", () => {
@@ -824,7 +861,7 @@ test("bundled agents parse with the existing parser and match their filename", (
 });
 
 test("bundled agents use only the supported frontmatter keys", () => {
-	const supported = new Set(["name", "description", "tools", "model", "tier"]);
+	const supported = new Set(["name", "description", "tools", "tier", "extensions"]);
 	for (const file of bundledAgentFiles()) {
 		const content = readFileSync(path.join(bundledAgentsDir, file), "utf-8");
 		const lines = content.split("\n");
@@ -844,6 +881,11 @@ test("bundled agents use only the supported frontmatter keys", () => {
 			assert.ok(supported.has(key), `${file} uses unsupported frontmatter key "${key}"`);
 		}
 	}
+});
+
+test("bundled researcher declares the web-access extension it needs", () => {
+	const researcher = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, "researcher.md"), "utf-8"));
+	assert.ok(researcher?.extensions?.includes("npm:pi-web-access"), "researcher must load its web provider");
 });
 
 test("bundled agent prompts reference only tools and concepts this project provides", () => {

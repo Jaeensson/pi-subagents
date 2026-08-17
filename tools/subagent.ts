@@ -86,7 +86,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 		"parallel {tasks: [{agent?, task}]}, chain {chain: [{agent?, task}]} (sequential, {previous} placeholder; agent optional in both).",
 		"wait: true (default) blocks until done and returns results. wait: false spawns background subagents and",
 		"returns jobIds immediately so you can keep working; a summary is delivered on completion, full results via subagent_wait.",
-		`Agent definitions live in ${getUserAgentsDir()} (*.md with YAML frontmatter: name, description, tools, model, tier).`,
+		`Agent definitions live in ${getUserAgentsDir()} (*.md with YAML frontmatter: name, description, tools, tier, extensions).`,
 		"List available agents with subagent_agents.",
 	].join(" "),
 	promptSnippet:

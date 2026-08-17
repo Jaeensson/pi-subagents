@@ -3,6 +3,7 @@ name: researcher
 description: Autonomous web researcher that searches, evaluates, and synthesizes a focused research brief
 tools: read, web_search, fetch_content, get_search_content
 tier: deep
+extensions: npm:pi-web-access
 ---
 
 You are a research subagent.

@@ -10,7 +10,7 @@
  *   name: scout
  *   description: Fast codebase recon
  *   tools: read, grep, find, ls, bash
- *   model: claude-haiku-4-5
+ *   tier: fast
  *   ---
  *   <system prompt body>
  */
@@ -109,8 +109,8 @@ export function discoverUserAgents(): AgentSummary[] {
 			name: parsed.name,
 			description: parsed.description,
 			tools: parsed.tools,
-			model: parsed.model,
 			tier: parsed.tier,
+			extensions: parsed.extensions,
 			systemPrompt: parsed.systemPrompt,
 			source: "user",
 			filePath,

@@ -15,7 +15,7 @@ const subagentAgentsParams = Type.Object({});
 export const subagentAgentsTool = defineTool<typeof subagentAgentsParams, ToolDetails>({
 	name: "subagent_agents",
 	label: "Subagent Agents",
-	description: `List available subagent definitions from ${getUserAgentsDir()}. Each is a markdown file with YAML frontmatter (name, description, tools, model, tier) and a system prompt body.`,
+	description: `List available subagent definitions from ${getUserAgentsDir()}. Each is a markdown file with YAML frontmatter (name, description, tools, tier, extensions) and a system prompt body.`,
 	promptSnippet: "List available subagent definitions",
 	parameters: subagentAgentsParams,
 
@@ -24,7 +24,7 @@ export const subagentAgentsTool = defineTool<typeof subagentAgentsParams, ToolDe
 		const lines = agents.map((a) => {
 			const parts = [`- **${a.name}** — ${a.description}`];
 			if (a.tools) parts.push(`  - tools: ${a.tools.join(", ")}`);
-			if (a.model) parts.push(`  - model: ${a.model}`);
+			if (a.extensions) parts.push(`  - extensions: ${a.extensions.join(", ")}`);
 			if (a.tier) parts.push(`  - tier: ${a.tier}`);
 			return parts.join("\n");
 		});

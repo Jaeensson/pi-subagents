@@ -125,7 +125,6 @@ export async function spawnTask(
 ): Promise<Task> {
 	const resolution = resolveModel({
 		callTier: options.tier,
-		agentModel: agent.model,
 		agentTier: agent.tier,
 		tierConfig: options.modelCtx.tierConfig,
 		defaultModel: options.modelCtx.defaultModel,
@@ -165,7 +164,13 @@ export async function spawnTask(
 			systemPromptFile = tmp.filePath;
 		}
 
-		const args = buildChildArgs({ model: resolution.model, tools: agent.tools, systemPromptFile, task: taskText });
+		const args = buildChildArgs({
+			model: resolution.model,
+			tools: agent.tools,
+			extensions: agent.extensions,
+			systemPromptFile,
+			task: taskText,
+		});
 		const invocation = getPiInvocation(args);
 		const proc = spawn(invocation.command, invocation.args, {
 			cwd,

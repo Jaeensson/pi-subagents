@@ -53,9 +53,11 @@ export interface AgentSummary {
 	systemPrompt: string;
 	source: "user" | "builtin";
 	filePath: string;
-	model?: string;
+	/** Concrete model overrides are intentionally unsupported: tier controls model selection. */
 	tier?: string;
 	tools?: string[];
+	/** Extension specs (e.g. "npm:pi-web-access") to load in the child besides the builtins. */
+	extensions?: string[];
 }
 
 // ── Default agent (raw prompt mode) ──────────────────────────────────────────
@@ -191,20 +193,20 @@ export function pickAutoTier(
 /**
  * Resolve which concrete model a task should run with.
  *
- * Precedence: call-time tier → agent frontmatter model → agent frontmatter
- * tier → parent default (inherit, model undefined). A requested tier resolves
- * via the explicit mapping first, then the auto-picker when enabled; an
- * unresolvable tier falls through to the next precedence level with a note.
+ * Precedence: call-time tier → agent frontmatter tier → parent default
+ * (inherit, model undefined). A requested tier resolves via the explicit
+ * mapping first, then the auto-picker when enabled; an unresolvable tier
+ * falls through to the next precedence level with a note. The frontmatter
+ * `model` key is intentionally unsupported — tier is the only model control.
  */
 export function resolveModel(options: {
 	callTier?: string;
-	agentModel?: string;
 	agentTier?: string;
 	tierConfig?: TierConfig;
 	defaultModel?: string;
 	catalog: CatalogModel[];
 }): ModelResolution {
-	const { callTier, agentModel, agentTier, tierConfig, defaultModel, catalog } = options;
+	const { callTier, agentTier, tierConfig, defaultModel, catalog } = options;
 	const notes: string[] = [];
 	const pushNote = (text: string) => {
 		if (!notes.includes(text)) notes.push(text);
@@ -215,7 +217,6 @@ export function resolveModel(options: {
 		if (resolved) return { model: resolved, tierUsed: callTier, note: notes.join("; ") || undefined };
 		pushNote(`tier "${callTier}" could not be resolved; falling back`);
 	}
-	if (agentModel) return { model: agentModel, note: notes.join("; ") || undefined };
 	if (isTierLevel(agentTier)) {
 		const resolved = resolveTier(agentTier, tierConfig, defaultModel, catalog, notes);
 		if (resolved) return { model: resolved, tierUsed: agentTier, note: notes.join("; ") || undefined };
@@ -264,7 +265,14 @@ function resolveTier(
  */
 export function parseAgentMarkdown(
 	content: string,
-): { name: string; description: string; tools?: string[]; model?: string; tier?: string; systemPrompt: string } | null {
+): {
+	name: string;
+	description: string;
+	tools?: string[];
+	tier?: string;
+	extensions?: string[];
+	systemPrompt: string;
+} | null {
 	const lines = content.split("\n");
 	if (lines.length === 0 || lines[0].trim() !== "---") return null;
 
@@ -304,8 +312,13 @@ export function parseAgentMarkdown(
 		?.split(",")
 		.map((t) => t.trim())
 		.filter(Boolean);
-	const model = frontmatter.get("model");
 	const tier = frontmatter.get("tier");
+	// The `model` key is intentionally not supported: tier is the only model control.
+	const extensionsRaw = frontmatter.get("extensions");
+	const extensions = extensionsRaw
+		?.split(",")
+		.map((t) => t.trim())
+		.filter(Boolean);
 
 	const systemPrompt = lines.slice(endIdx + 1).join("\n").trimStart().replace(/\n$/, "");
 
@@ -313,8 +326,8 @@ export function parseAgentMarkdown(
 		name,
 		description,
 		tools: tools && tools.length > 0 ? tools : undefined,
-		model: model || undefined,
 		tier: tier || undefined,
+		extensions: extensions && extensions.length > 0 ? extensions : undefined,
 		systemPrompt,
 	};
 }
@@ -329,6 +342,7 @@ export function parseAgentMarkdown(
 export function buildChildArgs(options: {
 	model?: string;
 	tools?: string[];
+	extensions?: string[];
 	systemPromptFile?: string;
 	task: string;
 }): string[] {
@@ -341,6 +355,11 @@ export function buildChildArgs(options: {
 		"--no-skills",
 		"--no-prompt-templates",
 	];
+	// Explicit -e flags still load with --no-extensions (no auto-discovery,
+	// no recursion risk); only agent-declared extensions are passed.
+	if (options.extensions && options.extensions.length > 0) {
+		for (const ext of options.extensions) args.push("-e", ext);
+	}
 	if (options.model) args.push("--model", options.model);
 	if (options.tools && options.tools.length > 0) args.push("--tools", options.tools.join(","));
 	if (options.systemPromptFile) args.push("--append-system-prompt", options.systemPromptFile);

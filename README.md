@@ -87,16 +87,17 @@ body:
 name: scout
 description: Fast recon agent, read-only
 tools: read, grep, find, ls, bash
-model: claude-haiku-4-5
 tier: fast
 ---
 
 You are a scout agent. Find information quickly and report it compactly.
 ```
 
-- `name` and `description` are required; `tools` (comma-separated), `model`,
-  and `tier` (`fast` | `balanced` | `deep`) are optional. Omit `tools` for the
-  full default toolset.
+- `name` and `description` are required; `tools` (comma-separated), `tier`
+  (`fast` | `balanced` | `deep`), and `extensions` (comma-separated extension
+  specs loaded in the child, e.g. `npm:pi-web-access`) are optional. Omit
+  `tools` for the full default toolset. The frontmatter `model` key is
+  intentionally unsupported — `tier` is the only model control.
 - Omit the agent entirely — in single, parallel, or chain mode — to use the
   built-in default general-purpose agent (raw prompt mode).
 - **Bundled defaults:** `scout` (tier `fast`), `researcher` (tier `deep`),
@@ -132,8 +133,8 @@ through a central mapping in pi's `settings.json`:
   `subagent { agent: "scout", task: "...", tier: "fast" }` (also per item in
   `tasks` and `chain`). Explicit per-tier values always win; `auto` fills only
   unmapped tiers.
-- Resolution precedence per task: call-time `tier` → agent `model` → agent
-  `tier` → the parent's default model.
+- Resolution precedence per task: call-time `tier` → agent `tier` → the
+  parent's default model.
 - With `auto: true`, tiers resolve relative to your `defaultModel`: `balanced`
   is always your default model; `fast` is the cheapest model in the same brand
   family; `deep` is the priciest family member (never jumping to another

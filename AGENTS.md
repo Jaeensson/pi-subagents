@@ -30,9 +30,12 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   tui depends only on runtime + core.
 - `agents.ts` discovers agent definitions from `~/.pi/agent/agents/*.md` and seeds the bundled defaults (`agents/*.md`: scout, researcher, worker) into that directory on load when missing.
 - Agent files: YAML frontmatter (`name`, `description` required; `tools`,
-  `model`, `tier` optional) + markdown system prompt body. `tier` is
+  `tier`, `extensions` optional) + markdown system prompt body. `tier` is
   `fast | balanced | deep`, resolved via `subagent.modelTiers` in pi's
-  settings.json.
+  settings.json. The `model` frontmatter key is intentionally unsupported.
+- Agents may declare `extensions` (comma-separated specs, e.g.
+  `npm:pi-web-access`) that are loaded in the child via explicit `-e` flags;
+  `--no-extensions` still prevents auto-discovery, so recursion is impossible.
 - Subagent children run `pi --mode json -p --no-session --no-extensions
   --no-skills --no-prompt-templates`.
 
