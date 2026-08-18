@@ -22,6 +22,7 @@ import {
 	formatCompletionNotification,
 	formatStatusReport,
 	formatElapsed,
+	formatModelTag,
 	formatTokens,
 	formatUsageStats,
 	familyStem,
@@ -654,6 +655,27 @@ test("formatElapsed floors partial seconds instead of rounding up", () => {
 	assert.equal(formatElapsed(1.9), "1s");
 	assert.equal(formatElapsed(59.9), "59s");
 	assert.equal(formatElapsed(61.9), "1m 1s");
+});
+
+// ── formatModelTag ────────────────────────────────────────────────────────────
+
+test("formatModelTag returns empty string when model is unknown", () => {
+	assert.equal(formatModelTag(undefined), "");
+});
+
+test("formatModelTag wraps short model ids in brackets", () => {
+	assert.equal(formatModelTag("claude-sonnet-4-5"), "[claude-sonnet-4-5]");
+});
+
+test("formatModelTag keeps a 32-char model id intact", () => {
+	const model = "opencode-go/deepseek-v4-pro:high"; // exactly 32 chars
+	assert.equal(model.length, 32);
+	assert.equal(formatModelTag(model), "[opencode-go/deepseek-v4-pro:high]");
+});
+
+test("formatModelTag truncates model ids longer than 32 chars", () => {
+	const model = "opencode-go/deepseek-v4-flash-ultra:long"; // 40 chars
+	assert.equal(formatModelTag(model), "[opencode-go/deepseek-v4-flash-u…]");
 });
 
 // ── resolveAgent / default agent ─────────────────────────────────────────────
