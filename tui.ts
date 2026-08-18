@@ -9,7 +9,7 @@
 import * as os from "node:os";
 import { Box, Text, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { completionHeader, formatElapsed, type CompletionDetails, type MessageLike } from "./core.ts";
+import { completionHeader, formatElapsed, formatModelTag, type CompletionDetails, type MessageLike } from "./core.ts";
 import { getRunningCount, jobs, tasks, type Task } from "./runtime.ts";
 
 export type DisplayItem =
@@ -234,7 +234,9 @@ function runningTaskLines(theme: any, width: number): string[] {
 			job?.mode === "chain" && job.chainTotal && t.step
 				? theme.fg("muted", ` step ${t.step}/${job.chainTotal}`)
 				: "";
-		lines.push(`  ${theme.fg("warning", "▸")} ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${elapsed}`)}${step}  ${lastActivity(t, theme)}`);
+		const modelTag = formatModelTag(t.model);
+		const modelText = modelTag ? ` ${theme.fg("dim", modelTag)}` : "";
+		lines.push(`  ${theme.fg("warning", "▸")} ${theme.fg("accent", t.agent)}${modelText}${theme.fg("dim", ` ${elapsed}`)}${step}  ${lastActivity(t, theme)}`);
 	}
 	return lines.map((line) => truncateToWidth(line, width));
 }
