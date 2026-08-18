@@ -483,10 +483,9 @@ export function formatElapsed(seconds: number): string {
 	return remM > 0 ? `${h}h ${remM}m` : `${h}h`;
 }
 
-const MODEL_TAG_MAX = 32;
-
 /** Format a model id for the status widget; "" when the model is not yet known. Long ids are truncated with an ellipsis. */
 export function formatModelTag(model: string | undefined): string {
+	const MODEL_TAG_MAX = 32;
 	if (!model) return "";
 	if (model.length <= MODEL_TAG_MAX) return `[${model}]`;
 	return `[${model.slice(0, MODEL_TAG_MAX - 1)}…]`;

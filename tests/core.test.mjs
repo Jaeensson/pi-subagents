@@ -661,6 +661,7 @@ test("formatElapsed floors partial seconds instead of rounding up", () => {
 
 test("formatModelTag returns empty string when model is unknown", () => {
 	assert.equal(formatModelTag(undefined), "");
+	assert.equal(formatModelTag(""), "");
 });
 
 test("formatModelTag wraps short model ids in brackets", () => {
