@@ -46,7 +46,7 @@ Line format becomes:
 
 - Model tag renders only when `t.model` is set: `[<model>]` placed after the
   agent name, before the elapsed time.
-- Tag is styled with the theme's muted/dim color (distinct from the
+- Tag is styled with `theme.fg("dim", ...)` (distinct from the
   accent-colored agent name).
 - Model ids longer than 32 chars are truncated with `…`.
 
