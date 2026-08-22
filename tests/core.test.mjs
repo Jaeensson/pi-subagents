@@ -26,6 +26,7 @@ import {
 	formatTokens,
 	formatUsageStats,
 	familyStem,
+	firstLine,
 	getFinalOutput,
 	getResultOutput,
 	isFailedState,
@@ -741,6 +742,14 @@ test("formatCompletionNotification summarizes a finished batch", () => {
 	assert.ok(text.includes("id-1"));
 	assert.ok(text.includes("jobIds"));
 	assert.ok(text.includes("subagent_wait"));
+});
+
+test("firstLine returns only text before the first line break", () => {
+	assert.equal(firstLine("npm test"), "npm test");
+	assert.equal(firstLine("foo \\\n  bar"), "foo \\");
+	assert.equal(firstLine("a\r\nb\nc"), "a");
+	assert.equal(firstLine("\nleading newline"), "");
+	assert.equal(firstLine(""), "");
 });
 
 test("formatCompletionNotification previews are capped", () => {

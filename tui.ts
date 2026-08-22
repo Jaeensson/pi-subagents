@@ -9,7 +9,7 @@
 import * as os from "node:os";
 import { Box, Text, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { completionHeader, formatElapsed, formatModelTag, type CompletionDetails, type MessageLike } from "./core.ts";
+import { completionHeader, firstLine, formatElapsed, formatModelTag, type CompletionDetails, type MessageLike } from "./core.ts";
 import { getRunningCount, jobs, tasks, type Task } from "./runtime.ts";
 
 export type DisplayItem =
@@ -45,7 +45,7 @@ export function formatToolCall(
 	};
 	switch (toolName) {
 		case "bash": {
-			const command = (args.command as string) || "...";
+			const command = firstLine((args.command as string) || "...");
 			const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
 			return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
 		}
