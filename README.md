@@ -77,6 +77,28 @@ tick), showing agent, elapsed time, chain step, and last activity:
 
 TUI-only — print/JSON modes are unaffected.
 
+### Watch pane
+
+While subagents run, press `shift+ctrl+w` to open a live watch pane showing a
+subagent's reasoning stream in real time — thinking (dim), visible text, tool
+calls, and in-progress tool output:
+
+    ● watching: researcher · 1/2  3m 12s · claude-opus-4-5
+      ⠿ let me check where settings are read…
+      → grep pattern="modelTiers" in src/
+      └ pages… done, 1 hit
+    ● live   ↑↓ scroll · PgUp/PgDn · Tab agent · End tail · Esc close
+
+- `shift+ctrl+w` toggles the pane (TUI only). `↑↓` scroll the retained
+  history, `PgUp`/`PgDn` page, `Tab` cycles running agents, `End` jumps back
+  to the live tail, `Esc` (or the toggle key) closes.
+- The pane does not capture focus — keep typing in the editor while open.
+- A finished selected agent keeps its final view (`✓ done`); the pane closes
+  automatically when the last agent finishes.
+- Reasoning is buffered in memory only (last 64 KB per task) and is never fed
+  back into the conversation or model context; completed results are exactly
+  as before via `subagent_wait` / the completion card.
+
 ## Agent definitions
 
 `~/.pi/agent/agents/*.md` — markdown with YAML frontmatter and a system prompt

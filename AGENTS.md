@@ -20,14 +20,19 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
 - Module layout (each file is a single responsibility):
   - `index.ts` — extension entry only: session hooks + tool registration
   - `runtime.ts` — in-memory task/job registry, waiters, completion checks
-    (no imports from sibling modules; safe to import from anywhere)
+    (type-only import from `live.ts`; safe to import from anywhere)
+  - `live.ts` — pure live-trace state: segment reducer over child stdout
+    (`message_update`/`tool_execution_*`) + trace→lines renderer (zero pi
+    imports; tested with `node --test`)
   - `process.ts` — child pi process lifecycle (spawn/kill/finalize)
   - `jobs.ts` — job orchestration: chain runner, concurrency limiter,
     result builders, model-tier context
   - `tui.ts` — TUI rendering helpers + persistent status widget
+  - `watch.ts` — keybind-toggled watch pane: overlay component, keys, ticker
+    (depends on runtime + live + core + tui; never on process/jobs)
   - `tools/*.ts` — one file per registered tool (`defineTool`)
-- Keep the dependency graph acyclic: runtime → process → jobs → tools;
-  tui depends only on runtime + core.
+- Keep the dependency graph acyclic: live → runtime → process → jobs → tools;
+  tui depends on runtime + core; watch depends on runtime + live + core + tui.
 - `agents.ts` discovers agent definitions from `~/.pi/agent/agents/*.md` and seeds the bundled defaults (`agents/*.md`: scout, researcher, worker, reviewer) into that directory on load when missing.
 - Agent files: YAML frontmatter (`name`, `description` required; `tools`,
   `tier`, `extensions` optional) + markdown system prompt body. `tier` is
