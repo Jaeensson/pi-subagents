@@ -167,6 +167,7 @@ const STATUS_WIDGET_KEY = "subagent-status";
 
 let uiRef: ExtensionContext["ui"] | undefined;
 let widgetTui: TUI | undefined;
+let widgetTheme: any | undefined;
 let widgetRegistered = false;
 let widgetTimer: NodeJS.Timeout | undefined;
 
@@ -175,10 +176,21 @@ export function setUi(ui: ExtensionContext["ui"] | undefined): void {
 	uiRef = ui;
 }
 
+/** TUI instance latched by the status widget (used by the watch pane). */
+export function getWidgetTui(): TUI | undefined {
+	return widgetTui;
+}
+
+/** Theme latched by the status widget (used by the watch pane). */
+export function getWidgetTheme(): any {
+	return widgetTheme;
+}
+
 /** Drop all widget state (session shutdown). */
 export function disposeWidget(): void {
 	uiRef = undefined;
 	widgetTui = undefined;
+	widgetTheme = undefined;
 	widgetRegistered = false;
 	stopWidgetTimer();
 }
@@ -248,11 +260,13 @@ export function updateStatusWidget() {
 	if (running && !widgetRegistered) {
 		uiRef.setWidget(STATUS_WIDGET_KEY, (tui, theme) => {
 			widgetTui = tui;
+			widgetTheme = theme;
 			return {
 				render: (width) => runningTaskLines(theme, width),
 				invalidate: () => {},
 				dispose: () => {
 					widgetTui = undefined;
+					widgetTheme = undefined;
 					widgetRegistered = false;
 					stopWidgetTimer();
 				},
