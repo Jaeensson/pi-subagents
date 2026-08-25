@@ -127,6 +127,7 @@ test("a new stream seals the previous one (thinking then text order)", () => {
 	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "why?" }), t);
 	t = reduceLiveEvent(msgu({ type: "text_start" }), t); // seals thinking
 	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "Because." }), t);
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "Because." }), t); // seals text (streams only seal at *_end or a kind boundary — pending holds the open stream)
 	const kinds = t.segments.map((s) => s.kind);
 	assert.deepEqual(kinds, ["thinking", "text"]);
 	assert.equal(t.segments[0].text, "why?");
