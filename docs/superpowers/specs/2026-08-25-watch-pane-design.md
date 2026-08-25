@@ -108,13 +108,18 @@ interface LiveTrace {
     Delta strings (`delta`) accumulate into `pending`; `*_start` events carry
     no delta but are **boundary signals that seal the previous stream**;
     `*_end` events carry `content`/`toolCall` and seal the current one.
-    `toolcall_end` emits a `toolCall` segment from its `toolCall` field
-    (deduped by `contentIndex`).
+    `toolcall_end` emits a `toolCall` segment from its `toolCall` field,
+    deduped by `contentIndex` via a per-index emitted SET (not a monotonic
+    watermark — skipped/reordered indices must stay recoverable at
+    reconcile); a `messageSealed` flag (set at `message_end`, cleared by the
+    next message's `*_start`) blocks straggling `toolcall_end` duplicates.
   - `tool_execution_start / _update / _end` → `toolOutput` segments. On the
     real wire `partialResult`/`result` are cumulative SNAPSHOT objects
     `{ content: [{ type: "text", text }] }` — the open segment's text is
     REPLACED by each new snapshot, never appended (`_end` also sets
-    `isError`).
+    `isError`). Open segments are routed by `toolCallId` (fallback: newest
+    toolOutput) so parallel or stale execution events can't misattribute
+    output or error flags; the cap is enforced on the replace path too.
 - **Sealing boundaries** (driven by the `*_start`/`toolcall_*` events above):
   `thinking_start` seals any pending text; `text_start` seals pending
   thinking; `toolcall_start`/`toolcall_delta`/`toolcall_end` seal pending
@@ -186,8 +191,9 @@ interface WatchState {
   - tool calls → reuse `formatToolCall(name, args, theme.fg)`
   - tool output → dim, indented
 - **Auto-close**: when the last watched agent finishes, close (completion
-  card announces results as today). New spawns while watching: header count
-  updates; `Tab` reaches them.
+  card announces results as today). While other agents still run, a finished
+  selected task KEEPS its final view — header `✓ done`, no counting elapsed
+  clock, no `0/N` position; `Tab` still cycles to running agents.
 - `closeWatch()` exported; called on session shutdown (with `disposeWidget()`).
 
 ### 5. `index.ts` + `tui.ts` — integration

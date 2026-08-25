@@ -1563,3 +1563,31 @@ git commit -m "docs(watch): watch pane README section + AGENTS.md module layout"
 - **Red-first integrity:** cap enforcement is intentionally absent in Tasks 2–4 (bytes are only *tracked*) so Task 5's test fails before `enforceCap` is introduced; Task 7 ships a `watch.ts` stub so its commit is green and Task 8's typecheck gate resolves against the real exports added in the same task.
 - **Placeholders:** none — every code step includes the full code; every verification step names the exact command and expected outcome.
 - **Type consistency:** `LiveTrace`/`TraceSegment`/`StyleFn`/`FormatToolCallFn` defined once (Task 2) and used unchanged by `traceToLines`/`buildTraceView` (Task 6) and `watch.ts` (Task 8). `buildTraceView` opts use `linesBack` everywhere (Task 6 definition matches Task 8 call site). `handleWatchInput` return type `{ consume?: boolean } | undefined` matches `TerminalInputHandler`. `maybeAutoCloseWatch` name is consistent between `watch.ts` and `process.ts`; `getWidgetTui`/`getWidgetTheme` are exported by `tui.ts` in the same task (Task 8) that `watch.ts` starts importing them.
+---
+
+## Amendments during execution (recorded for future re-runs)
+
+The verified-wire spike and implementation reviews changed several plan
+details from the originally-written text:
+
+1. **`message_update` carries no `message` on stdout** (only `type` +
+   `assistantMessageEvent`). Live tool-call emission comes from
+   `toolcall_end.toolCall`; `message_end` content parts are the reconcile
+   source (Task 3 rewritten mid-flight; `emitToolCall`).
+2. **`tool_execution_*` snapshots**: `partialResult`/`result` are cumulative
+   `{content:[{type:text,text}]}` objects — REPLACE semantics, not append;
+   `toolResultText` unwraps them; routed by `toolCallId` (Task 4).
+3. **Tool-call dedupe is a per-index Set** (`emittedToolIndices`) plus a
+   `messageSealed` flag, not a `lastToolIndex` watermark — fixes two proven
+   holes (skipped-index misses; post-`message_end` straggler duplicates).
+4. **Cap enforcement has five call sites**, including `emitToolCall` and the
+   `setOpenToolOutput` replace path (plan text originally listed four and
+   referenced an obsolete `appendToolOutput`).
+5. **Renderer**: empty toolOutput segments render nothing; `wrapToWidth`
+   drops a trailing empty element from a trailing newline (documented
+   contract); prefixes consume wrap width.
+6. **Watch pane**: a finished selected task KEEPS its final view (`✓ done`,
+   frozen elapsed, no `0/N`); auto-close only when nothing runs; the keybind
+   is shared as `WATCH_PANE_KEYBIND` in core.ts.
+7. **Test counts**: final suite is 85 core + 52 live = 137 (grew as
+   regressions were pinned).
