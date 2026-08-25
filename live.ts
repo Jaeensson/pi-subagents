@@ -23,7 +23,7 @@ export interface LiveTrace {
 	dropped: number;
 	/** Unsealed stream currently being built (thinking or text). */
 	pending: { kind: "thinking" | "text"; text: string } | null;
-	/** Bookkeeping: highest toolCall content-index emitted from message content. */
+	/** Bookkeeping: highest toolCall content-index emitted (streamed or reconciled). */
 	lastToolIndex: number;
 }
 
@@ -41,6 +41,8 @@ interface JsonEvent {
 		type?: string;
 		delta?: string;
 		content?: string;
+		contentIndex?: number;
+		toolCall?: { name?: unknown; arguments?: unknown };
 	};
 }
 
@@ -117,9 +119,12 @@ function applyMessageUpdate(event: JsonEvent, trace: LiveTrace): LiveTrace {
 			applyStreamDelta(trace, "thinking", dt, deltaText, content);
 		} else if (dt === "text_start" || dt === "text_delta" || dt === "text_end") {
 			applyStreamDelta(trace, "text", dt, deltaText, content);
+		} else if (dt === "toolcall_start" || dt === "toolcall_delta" || dt === "toolcall_end") {
+			// A tool call begins after any open thinking/text stream.
+			sealPending(trace);
+			if (dt === "toolcall_end") emitToolCall(ame, trace);
 		}
 	}
-	scanToolCalls(event.message, trace);
 	return trace;
 }
 
@@ -140,7 +145,23 @@ function parseArgs(raw: unknown): Record<string, unknown> {
 	return { raw: String(raw ?? "") };
 }
 
-/** Emit a toolCall segment for each content part not yet emitted (dedupe by content index). */
+/**
+ * Emit a toolCall segment from a streamed toolcall_end, deduped by content
+ * index against both streamed and reconcile-emitted segments.
+ */
+function emitToolCall(ame: NonNullable<JsonEvent["assistantMessageEvent"]>, trace: LiveTrace): void {
+	const idx = typeof ame.contentIndex === "number" ? ame.contentIndex : 0;
+	if (idx <= trace.lastToolIndex) return;
+	const tc = ame.toolCall;
+	if (!tc) return;
+	const name = typeof tc.name === "string" && tc.name ? tc.name : "?";
+	const args = parseArgs(tc.arguments);
+	trace.lastToolIndex = idx;
+	trace.segments.push({ kind: "toolCall", name, args });
+	trace.bytes += segmentBytes({ kind: "toolCall", name, args });
+}
+
+/** Reconcile at message_end: emit toolCall content parts whose index was never streamed. */
 function scanToolCalls(message: { content?: Array<Record<string, unknown>> } | undefined, trace: LiveTrace): void {
 	if (!message?.content) return;
 	const content = message.content;
