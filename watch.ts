@@ -148,12 +148,15 @@ function renderWatchPane(tui: TUI, width: number): string[] {
 	if (!theme) return [];
 	const state = watchState ?? { taskId: "", linesBack: 0 };
 	let task = tasks.get(state.taskId);
-	const running = runningTasks();
-	if (running.length > 0 && (!task || task.status !== "running")) {
-		task = running[0];
-		state.taskId = task.id;
-		state.linesBack = 0;
+	if (!task) {
+		// Selected task vanished from the registry — fall back to the first running task.
+		task = runningTasks()[0] ?? null;
+		if (task) {
+			state.taskId = task.id;
+			state.linesBack = 0;
+		}
 	}
+	const running = runningTasks();
 	const paneH = Math.max(6, Math.floor(tui.terminal.rows * 0.9));
 	const header = buildHeader(task, running, state, theme);
 	const footer = buildFooter(state, theme);
@@ -168,12 +171,12 @@ function renderWatchPane(tui: TUI, width: number): string[] {
 	return [header, ...content, footer];
 }
 
-function buildHeader(task: Task | undefined, running: Task[], state: WatchState, theme: any): string {
+function buildHeader(task: Task | null, running: Task[], state: WatchState, theme: any): string {
 	const pos = running.findIndex((t) => t.id === state.taskId);
 	const label = task ? theme.fg("accent", task.agent) : theme.fg("muted", "—");
 	const sel = running.length > 0 ? theme.fg("accent", `${pos + 1}/${running.length}`) : "";
 	const elapsed = task ? theme.fg("dim", formatElapsed((Date.now() - task.startedAt) / 1000)) : "";
-	const model = task ? theme.fg("dim", formatModelTag(task.model).trim()) : "";
+	const model = task ? theme.fg("dim", formatModelTag(task.model)) : "";
 	const status = task?.status === "running" ? theme.fg("warning", "● watching") : theme.fg("success", "✓ done");
 	const meta = [label, sel, elapsed, model].filter(Boolean).join(theme.fg("dim", " · "));
 	return `${status}  ${meta}`;
