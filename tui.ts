@@ -237,7 +237,8 @@ function runningTaskLines(theme: any, width: number): string[] {
 
 	const now = Date.now();
 	const lines: string[] = [
-		theme.fg("warning", `⏳ ${running.length} subagent${running.length === 1 ? "" : "s"} running`),
+		theme.fg("warning", `⏳ ${running.length} subagent${running.length === 1 ? "" : "s"} running`) +
+		theme.fg("muted", " · shift+ctrl+w to watch"),
 	];
 	for (const t of running) {
 		const elapsed = formatElapsed((now - t.startedAt) / 1000);

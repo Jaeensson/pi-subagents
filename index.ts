@@ -34,6 +34,7 @@ import { killTask } from "./process.ts";
 import { seedBundledAgents } from "./agents.ts";
 import { clearRegistry, listRunningTasks, setMessageSender } from "./runtime.ts";
 import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, setUi } from "./tui.ts";
+import { disposeWatch, handleWatchInput } from "./watch.ts";
 import { subagentAgentsTool } from "./tools/subagent-agents.ts";
 import { subagentStatusTool } from "./tools/subagent-status.ts";
 import { subagentWaitTool } from "./tools/subagent-wait.ts";
@@ -63,12 +64,14 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
 		setUi(ctx.ui);
+		ctx.ui.onTerminalInput((data) => handleWatchInput(data));
 	});
 
 	pi.on("session_shutdown", async () => {
 		// Drop UI references first so task-close callbacks during teardown no-op.
 		setUi(undefined);
 		disposeWidget();
+		disposeWatch();
 		for (const t of listRunningTasks()) killTask(t);
 		clearRegistry();
 	});
