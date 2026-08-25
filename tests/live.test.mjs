@@ -262,3 +262,57 @@ test("toolcall_delta without toolcall_start still seals an open text stream", ()
 	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "bash", arguments: { command: "ls" } } }), t);
 	assert.deepEqual(t.segments.map((s) => s.kind), ["text", "toolCall"]);
 });
+
+const execEv = (type, extra = {}) => ({ type, toolCallId: "t1", toolName: "bash", args: { command: "npm test" }, ...extra });
+const textSnap = (text) => ({ content: [{ type: "text", text }] });
+
+test("tool execution updates REPLACE the open toolOutput segment with the cumulative snapshot", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("npm ") }), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("npm test") }), t);
+	const seg = t.segments[t.segments.length - 1];
+	assert.equal(seg.kind, "toolOutput");
+	assert.equal(seg.text, "npm test"); // replaced, not "npm npm test"
+});
+
+test("tool execution start with no updates leaves an empty open segment", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	const seg = t.segments[t.segments.length - 1];
+	assert.equal(seg.kind, "toolOutput");
+	assert.equal(seg.text, "");
+});
+
+test("tool execution end replaces text with the final result and flags isError", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("ok") }), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("ok"), isError: false }), t);
+	const seg = t.segments[t.segments.length - 1];
+	assert.equal(seg.text, "ok");
+	assert.equal(seg.isError, false);
+});
+
+test("tool execution end delivers a result never streamed", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("boom"), isError: true }), t);
+	const seg = t.segments[t.segments.length - 1];
+	assert.equal(seg.text, "boom");
+	assert.equal(seg.isError, true);
+});
+
+test("tool execution partial result may be a plain string (defensive)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: "plain" }), t);
+	assert.equal(t.segments[t.segments.length - 1].text, "plain");
+});
+
+test("empty snapshot content renders as empty text (no JSON fallback noise)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [] } }), t);
+	assert.equal(t.segments[t.segments.length - 1].text, "");
+});

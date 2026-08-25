@@ -192,6 +192,68 @@ function applyMessageEnd(event: JsonEvent, trace: LiveTrace): LiveTrace {
 	return trace;
 }
 
+/** Last segment if it exists (search backwards for the newest toolOutput). */
+function lastToolOutputSegment(trace: LiveTrace): TraceSegment | null {
+	for (let i = trace.segments.length - 1; i >= 0; i--) {
+		if (trace.segments[i].kind === "toolOutput") return trace.segments[i];
+	}
+	return null;
+}
+
+/**
+ * Extract renderable text from a tool result. Real wires send snapshot objects
+ * `{ content: [{ type: "text", text }] }`; a plain string is passed through;
+ * anything else JSON-stringifies (empty content arrays → "").
+ */
+function toolResultText(raw: unknown): string {
+	if (typeof raw === "string") return raw;
+	if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+		const content = (raw as Record<string, unknown>).content;
+		if (Array.isArray(content)) {
+			let out = "";
+			for (const part of content) {
+				if (part && typeof part === "object" && (part as Record<string, unknown>).type === "text") {
+					const text = (part as Record<string, unknown>).text;
+					if (typeof text === "string") out += text;
+				}
+			}
+			return out;
+		}
+	}
+	try {
+		return JSON.stringify(raw ?? "");
+	} catch {
+		return String(raw ?? "");
+	}
+}
+
+/** Replace the open toolOutput segment's text (snapshots, not deltas), keeping bytes accurate. */
+function setOpenToolOutput(trace: LiveTrace, text: string): void {
+	const seg = lastToolOutputSegment(trace);
+	if (!seg) return;
+	const old = seg.text;
+	if (old === text) return;
+	seg.text = text;
+	const deltaBytes = Buffer.byteLength(text, "utf8") - Buffer.byteLength(old, "utf8");
+	trace.bytes += deltaBytes;
+}
+
+function applyToolExecution(evType: string, event: Record<string, unknown>, trace: LiveTrace): LiveTrace {
+	if (evType === "tool_execution_start") {
+		trace.segments.push({ kind: "toolOutput", text: "" });
+		return trace;
+	}
+	if (evType === "tool_execution_update") {
+		setOpenToolOutput(trace, toolResultText(event.partialResult));
+		return trace;
+	}
+	// tool_execution_end
+	setOpenToolOutput(trace, toolResultText(event.result));
+	const seg = lastToolOutputSegment(trace);
+	if (seg) seg.isError = event.isError === true;
+	return trace;
+}
+
 /**
  * Parse one child stdout line and reduce live-relevant events into trace.
  * Never throws; non-live or malformed lines leave `trace` untouched.
@@ -216,6 +278,10 @@ export function reduceLiveEvent(event: JsonEvent, trace: LiveTrace): LiveTrace {
 			return applyMessageUpdate(event, trace);
 		case "message_end":
 			return applyMessageEnd(event, trace);
+		case "tool_execution_start":
+		case "tool_execution_update":
+		case "tool_execution_end":
+			return applyToolExecution(event.type, event, trace);
 		default:
 			return trace;
 	}
