@@ -137,6 +137,24 @@ test("end events adopt content when the stream emitted no deltas", () => {
 	assert.deepEqual(t.segments, [{ kind: "text", text: "only-end-content" }]);
 });
 
+test("end content is ignored when the stream was already sealed by a boundary (out-of-order end events)", () => {
+	// Real capture: thinking deltas, then text_start, then a late thinking_end.
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "Think" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t); // seals thinking from deltas
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "done" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_end", content: "Think" }), t); // arrives late — must not duplicate
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "done" }), t);
+	assert.deepEqual(t.segments, [
+		{ kind: "thinking", text: "Think" },
+		{ kind: "text", text: "done" },
+	]);
+});
+
+// A note for the implementer: this test matches the exact ordering observed in a
+// real child run — thinking_end arrived AFTER text_start/text_delta.
+
 test("whitespace-only streams never produce segments", () => {
 	let t = emptyLiveTrace();
 	t = reduceLiveEvent(msgu({ type: "thinking_start" }), t);
@@ -251,14 +269,13 @@ function applyStreamDelta(trace: LiveTrace, kind: "thinking" | "text", dt: strin
 		appendStreamDelta(trace, kind, deltaText ?? "");
 		return;
 	}
-	// `*_end`: seal what we have; adopt `content` only when the stream was empty
-	// (covers providers that emit start/end with no deltas).
+	// `*_end`: seal what we have. Adopt `content` ONLY when the same-kind stream
+	// is still pending AND empty (delta-less provider fallback). Never synthesize
+	// or disturb a different-kind pending: real providers emit `*_end` after the
+	// next stream already started (observed in spike), and the deltas already
+	// captured that content — adopting would duplicate/reorder segments.
 	if (content) {
-		if (!trace.pending || trace.pending.kind !== kind) {
-			sealPending(trace);
-			trace.pending = { kind, text: content };
-			trace.bytes += Buffer.byteLength(content, "utf8");
-		} else if (!trace.pending.text) {
+		if (trace.pending && trace.pending.kind === kind && !trace.pending.text) {
 			trace.pending.text = content;
 			trace.bytes += Buffer.byteLength(content, "utf8");
 		}
