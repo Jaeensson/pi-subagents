@@ -386,3 +386,41 @@ test("toolOutput snapshot over the cap evicts to keep bytes bounded", () => {
 	assert.ok(t.segments.some((s) => s.kind === "toolOutput" && s.toolCallId === "b"));
 	assert.ok(t.bytes <= LIVE_TRACE_CAP_BYTES || t.segments.length === 0);
 });
+
+test("a single toolOutput snapshot larger than the cap evicts itself", () => {
+	let t = emptyLiveTrace();
+	const huge = "z".repeat(200 * 1024);
+	t = reduceLiveEvent(execEv("tool_execution_start", {}, "a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [{ type: "text", text: huge }] } }, "a"), t);
+	assert.equal(t.segments.length, 0);
+	assert.equal(t.bytes, 0);
+	assert.equal(t.dropped, 1);
+});
+
+test("cap invariant holds after every reduce in a mixed feed", () => {
+	let t = emptyLiveTrace();
+	const inv = () => assert.ok(t.bytes <= LIVE_TRACE_CAP_BYTES || t.segments.length === 0, `bytes ${t.bytes} > cap with ${t.segments.length} segments`);
+	for (let i = 0; i < 6; i++) {
+		t = reduceLiveEvent(msgu({ type: "text_delta", delta: "x".repeat(48 * 1024) }), t);
+		inv();
+		t = reduceLiveEvent(execEv("tool_execution_start", {}, `c${i}`), t);
+		inv();
+		t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [{ type: "text", text: "y".repeat(48 * 1024) }] } }, `c${i}`), t);
+		inv();
+		t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "" }] } }, t);
+		inv();
+	}
+});
+
+test("toolCall segments are evictable when over cap", () => {
+	let t = emptyLiveTrace();
+	const callWith = (name, args) => ({ type: "toolcall_end", contentIndex: 0, toolCall: { name, arguments: args } });
+	// 2 toolcalls each ~40KB of args (> 64KB total) → head evicted
+	for (let i = 0; i < 2; i++) {
+		t = reduceLiveEvent(msgu({ type: "toolcall_start", contentIndex: i }), t);
+		t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: i, toolCall: { name: `t${i}`, arguments: { big: "q".repeat(40 * 1024) } } }), t);
+	}
+	assert.ok(t.dropped >= 1, "expected eviction");
+	assert.ok(t.segments.some((s) => s.kind === "toolCall" && s.name === "t1"));
+	assert.ok(t.bytes <= LIVE_TRACE_CAP_BYTES || t.segments.length === 0);
+});
