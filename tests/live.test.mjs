@@ -172,8 +172,8 @@ test("toolcall_end with string JSON arguments parses them into an object", () =>
 
 test("the same contentIndex is not emitted twice; message_end does not duplicate it", () => {
 	let t = emptyLiveTrace();
-	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 1, toolCall: { name: "grep", arguments: { pattern: "x" } } }), t);
-	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 1, toolCall: { name: "grep", arguments: { pattern: "x" } } }), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "grep", arguments: { pattern: "x" } } }), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "grep", arguments: { pattern: "x" } } }), t);
 	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolCall("grep", { pattern: "x" })] } }, t);
 	assert.equal(t.segments.length, 1);
 });
@@ -189,6 +189,8 @@ test("message_end resets the content index for the next message", () => {
 	let t = emptyLiveTrace();
 	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "read", arguments: '{"path":"a.ts"}' } }), t);
 	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolCall("read", { path: "a.ts" })] } }, t);
+	// next message begins with toolcall_start (clears the sealed flag), index 0 fresh again
+	t = reduceLiveEvent(msgu({ type: "toolcall_start", contentIndex: 0 }), t);
 	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "bash", arguments: '{"command":"npm test"}' } }), t);
 	assert.deepEqual(t.segments.map((s) => s.name), ["read", "bash"]);
 });
@@ -207,4 +209,46 @@ test("message_end seals any still-open stream", () => {
 	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "trailing" }), t);
 	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "trailing" }] } }, t);
 	assert.deepEqual(t.segments, [{ kind: "text", text: "trailing" }]);
+});
+
+test("reconcile emits a toolCall index that was never streamed even when a HIGHER index was", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 2, toolCall: { name: "c", arguments: {} } }), t);
+	const content = [toolCall("grep", { pattern: "x" }), toolCall("read", { path: "a.ts" }), toolCall("c", {})];
+	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content } }, t);
+	assert.deepEqual(t.segments.map((s) => s.name), ["c", "grep", "read"]);
+});
+
+test("toolcall_end without contentIndex emits when index 0 was never emitted", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", toolCall: { name: "bash", arguments: { command: "ls" } } }), t);
+	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "bash", args: { command: "ls" } }]);
+});
+
+test("a straggling toolcall_end after message_end does not duplicate (messageSealed)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "read", arguments: { path: "a.ts" } } }), t);
+	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolCall("read", { path: "a.ts" })] } }, t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "read", arguments: { path: "a.ts" } } }), t); // straggler
+	assert.equal(t.segments.length, 1);
+});
+
+test("toolcall with null arguments wraps as raw 'null'", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "bash", arguments: null } }), t);
+	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "bash", args: { raw: "null" } }]);
+});
+
+test("toolcall with non-string name falls back to '?'", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: 42, arguments: {} } }), t);
+	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "?", args: {} }]);
+});
+
+test("toolcall_delta without toolcall_start still seals an open text stream", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "checking" }), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_delta", contentIndex: 0, delta: "{}" }), t); // no preceding start
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "bash", arguments: { command: "ls" } } }), t);
+	assert.deepEqual(t.segments.map((s) => s.kind), ["text", "toolCall"]);
 });

@@ -23,8 +23,10 @@ export interface LiveTrace {
 	dropped: number;
 	/** Unsealed stream currently being built (thinking or text). */
 	pending: { kind: "thinking" | "text"; text: string } | null;
-	/** Bookkeeping: highest toolCall content-index emitted (streamed or reconciled). */
-	lastToolIndex: number;
+	/** Bookkeeping: toolCall content indices already emitted (streamed or reconciled). */
+	emittedToolIndices: Set<number>;
+	/** True between a message_end and the next message's first *_start (blocks stragglers). */
+	messageSealed: boolean;
 }
 
 export type StyleFn = (color: string, text: string) => string;
@@ -47,7 +49,7 @@ interface JsonEvent {
 }
 
 export function emptyLiveTrace(): LiveTrace {
-	return { segments: [], bytes: 0, dropped: 0, pending: null, lastToolIndex: -1 };
+	return { segments: [], bytes: 0, dropped: 0, pending: null, emittedToolIndices: new Set(), messageSealed: false };
 }
 
 function segmentBytes(seg: TraceSegment): number {
@@ -115,11 +117,15 @@ function applyMessageUpdate(event: JsonEvent, trace: LiveTrace): LiveTrace {
 		const dt = ame.type;
 		const deltaText = typeof ame.delta === "string" ? ame.delta : undefined;
 		const content = typeof ame.content === "string" ? ame.content : undefined;
+		if (dt === "thinking_start" || dt === "text_start" || dt === "toolcall_start") {
+			// A new message begins with a *_start: unseal after the previous message_end.
+			trace.messageSealed = false;
+		}
 		if (dt === "thinking_start" || dt === "thinking_delta" || dt === "thinking_end") {
 			applyStreamDelta(trace, "thinking", dt, deltaText, content);
 		} else if (dt === "text_start" || dt === "text_delta" || dt === "text_end") {
 			applyStreamDelta(trace, "text", dt, deltaText, content);
-		} else if (dt === "toolcall_start" || dt === "toolcall_delta" || dt === "toolcall_end") {
+		} else if ((dt === "toolcall_start" || dt === "toolcall_delta" || dt === "toolcall_end") && !trace.messageSealed) {
 			// A tool call begins after any open thinking/text stream.
 			sealPending(trace);
 			if (dt === "toolcall_end") emitToolCall(ame, trace);
@@ -142,7 +148,7 @@ function parseArgs(raw: unknown): Record<string, unknown> {
 			/* fall through to raw wrapper */
 		}
 	}
-	return { raw: String(raw ?? "") };
+	return { raw: raw === null ? "null" : String(raw ?? "") };
 }
 
 /**
@@ -151,12 +157,12 @@ function parseArgs(raw: unknown): Record<string, unknown> {
  */
 function emitToolCall(ame: NonNullable<JsonEvent["assistantMessageEvent"]>, trace: LiveTrace): void {
 	const idx = typeof ame.contentIndex === "number" ? ame.contentIndex : 0;
-	if (idx <= trace.lastToolIndex) return;
+	if (trace.emittedToolIndices.has(idx)) return;
 	const tc = ame.toolCall;
 	if (!tc) return;
 	const name = typeof tc.name === "string" && tc.name ? tc.name : "?";
 	const args = parseArgs(tc.arguments);
-	trace.lastToolIndex = idx;
+	trace.emittedToolIndices.add(idx);
 	trace.segments.push({ kind: "toolCall", name, args });
 	trace.bytes += segmentBytes({ kind: "toolCall", name, args });
 }
@@ -166,10 +172,10 @@ function scanToolCalls(message: { content?: Array<Record<string, unknown>> } | u
 	if (!message?.content) return;
 	const content = message.content;
 	for (let i = 0; i < content.length; i++) {
-		if (i <= trace.lastToolIndex) continue;
+		if (trace.emittedToolIndices.has(i)) continue;
 		const part = content[i];
 		if (!part || part.type !== "toolCall") continue;
-		trace.lastToolIndex = i;
+		trace.emittedToolIndices.add(i);
 		const name = typeof part.name === "string" && part.name ? part.name : "?";
 		const args = parseArgs(part.arguments);
 		trace.segments.push({ kind: "toolCall", name, args });
@@ -177,11 +183,12 @@ function scanToolCalls(message: { content?: Array<Record<string, unknown>> } | u
 	}
 }
 
-/** Reconcile at message end: seal open streams, emit remaining toolCalls, reset the content index. */
+/** Reconcile at message end: seal open streams, emit remaining toolCalls, seal the message. */
 function applyMessageEnd(event: JsonEvent, trace: LiveTrace): LiveTrace {
 	sealPending(trace);
 	scanToolCalls(event.message, trace);
-	trace.lastToolIndex = -1;
+	trace.emittedToolIndices.clear();
+	trace.messageSealed = true;
 	return trace;
 }
 
