@@ -917,7 +917,7 @@ test("bundled agents use only the supported frontmatter keys", () => {
 
 test("bundled researcher declares the web-access extension it needs", () => {
 	const researcher = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, "researcher.md"), "utf-8"));
-	assert.ok(researcher?.extensions?.includes("npm:pi-web-access"), "researcher must load its web provider");
+	assert.ok(researcher?.extensions?.includes("npm:donsetch"), "researcher must load its web provider");
 });
 
 test("reviewer shell access is constrained to read-only verification", () => {
@@ -940,7 +940,7 @@ test("bundled agent prompts reference only tools and concepts this project provi
 	const worker = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, "worker.md"), "utf-8"));
 	assert.ok(worker?.tools?.includes("edit") && worker.tools.includes("write"));
 	const researcher = parseAgentMarkdown(readFileSync(path.join(bundledAgentsDir, "researcher.md"), "utf-8"));
-	for (const tool of ["web_search", "fetch_content", "get_search_content"]) {
+	for (const tool of ["web_search", "web_fetch", "web_crawl"]) {
 		assert.ok(researcher?.tools?.includes(tool), `researcher must include ${tool}`);
 	}
 });
