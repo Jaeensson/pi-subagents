@@ -9,7 +9,7 @@
 import * as os from "node:os";
 import { Box, Text, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { completionHeader, firstLine, formatElapsed, formatModelTag, type CompletionDetails, type MessageLike } from "./core.ts";
+import { completionHeader, firstLine, formatElapsed, formatModelTag, WATCH_PANE_KEYBIND, type CompletionDetails, type MessageLike } from "./core.ts";
 import { getRunningCount, jobs, tasks, type Task } from "./runtime.ts";
 
 export type DisplayItem =
@@ -238,7 +238,7 @@ function runningTaskLines(theme: any, width: number): string[] {
 	const now = Date.now();
 	const lines: string[] = [
 		theme.fg("warning", `⏳ ${running.length} subagent${running.length === 1 ? "" : "s"} running`) +
-		theme.fg("muted", " · shift+ctrl+w to watch"),
+		theme.fg("muted", ` · ${WATCH_PANE_KEYBIND} to watch`),
 	];
 	for (const t of running) {
 		const elapsed = formatElapsed((now - t.startedAt) / 1000);
