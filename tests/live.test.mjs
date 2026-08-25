@@ -219,9 +219,9 @@ test("reconcile emits a toolCall index that was never streamed even when a HIGHE
 	assert.deepEqual(t.segments.map((s) => s.name), ["c", "grep", "read"]);
 });
 
-test("toolcall_end without contentIndex emits when index 0 was never emitted", () => {
+test("toolcall_end WITHOUT contentIndex defaults to index 0 and emits", () => {
 	let t = emptyLiveTrace();
-	t = reduceLiveEvent(msgu({ type: "toolcall_end", toolCall: { name: "bash", arguments: { command: "ls" } } }), t);
+	t = reduceLiveEvent({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "toolcall_end", toolCall: { name: "bash", arguments: { command: "ls" } } } }, t);
 	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "bash", args: { command: "ls" } }]);
 });
 
@@ -231,6 +231,16 @@ test("a straggling toolcall_end after message_end does not duplicate (messageSea
 	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolCall("read", { path: "a.ts" })] } }, t);
 	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "read", arguments: { path: "a.ts" } } }), t); // straggler
 	assert.equal(t.segments.length, 1);
+});
+
+test("text_start after message_end unseals the tool-call path for the next message", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "read", arguments: { path: "a.ts" } } }), t);
+	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolCall("read", { path: "a.ts" })] } }, t);
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t); // next message begins with text — unseals
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "ok" }), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "bash", arguments: {} } }), t); // now allowed
+	assert.deepEqual(t.segments.map((s) => s.kind), ["toolCall", "text", "toolCall"]);
 });
 
 test("toolcall with null arguments wraps as raw 'null'", () => {
