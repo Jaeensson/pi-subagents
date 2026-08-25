@@ -92,3 +92,66 @@ test("whitespace-only streams never produce segments", () => {
 	assert.deepEqual(t.segments, []);
 	assert.equal(t.pending, null);
 });
+
+test("delta without a prior start opens a pending stream (D1)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "hi" }), t);
+	assert.equal(t.pending.text, "hi");
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "hi" }), t);
+	assert.deepEqual(t.segments, [{ kind: "text", text: "hi" }]);
+});
+
+test("non-string deltas are ignored without throwing (D2)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: 42 }), t); // must not throw
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "x" }), t);
+	assert.deepEqual(t.segments, [{ kind: "text", text: "x" }]);
+});
+
+test("bytes count multi-byte UTF-8 deltas exactly (D3)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "😀" }), t); // 4 UTF-8 bytes
+	assert.equal(t.bytes, 4);
+	t = reduceLiveEvent(msgu({ type: "text_end" }), t);
+	assert.equal(t.bytes, 4);
+});
+
+test("sequential same-kind streams seal into separate same-kind segments (D4)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "a" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_end" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "b" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_end" }), t);
+	assert.deepEqual(t.segments, [
+		{ kind: "text", text: "a" },
+		{ kind: "text", text: "b" },
+	]);
+});
+
+test("late *_end never seals a different-kind pending stream (D5)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "Why?" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "Hello" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_end", content: "Why?" }), t); // late — must NOT seal text
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: " world" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "Hello world" }), t);
+	assert.deepEqual(t.segments, [
+		{ kind: "thinking", text: "Why?" },
+		{ kind: "text", text: "Hello world" },
+	]);
+});
+
+test("dropping a whitespace-only pending stream subtracts its bytes (D6)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "   " }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_end" }), t);
+	assert.deepEqual(t.segments, []);
+	assert.equal(t.pending, null);
+	assert.equal(t.bytes, 0);
+});

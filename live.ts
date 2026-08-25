@@ -58,7 +58,10 @@ function sealPending(trace: LiveTrace): void {
 	const pending = trace.pending;
 	if (!pending) return;
 	trace.pending = null;
-	if (!pending.text.trim()) return;
+	if (!pending.text.trim()) {
+		trace.bytes = Math.max(0, trace.bytes - Buffer.byteLength(pending.text, "utf8"));
+		return;
+	}
 	trace.segments.push(
 		pending.kind === "thinking"
 			? { kind: "thinking", text: pending.text }
@@ -89,18 +92,19 @@ function applyStreamDelta(trace: LiveTrace, kind: "thinking" | "text", dt: strin
 		appendStreamDelta(trace, kind, deltaText ?? "");
 		return;
 	}
-	// `*_end`: seal what we have. Adopt `content` ONLY when the same-kind stream
-	// is still pending AND empty (delta-less provider fallback). Never synthesize
-	// or disturb a different-kind pending: real providers emit `*_end` after the
-	// next stream already started (observed in spike), and the deltas already
-	// captured that content — adopting would duplicate/reorder segments.
+	// `*_end`: adopt `content` ONLY when the same-kind stream is still pending
+	// AND empty (delta-less provider fallback). Never synthesize or disturb a
+	// different-kind pending: real providers emit `*_end` after the next stream
+	// already started (observed in spike), and the deltas already captured that
+	// content — adopting would duplicate/reorder segments. The end seals its own
+	// stream only when that stream is still pending.
 	if (content) {
 		if (trace.pending && trace.pending.kind === kind && !trace.pending.text) {
 			trace.pending.text = content;
 			trace.bytes += Buffer.byteLength(content, "utf8");
 		}
 	}
-	sealPending(trace);
+	if (trace.pending?.kind === kind) sealPending(trace);
 }
 
 function applyMessageUpdate(event: JsonEvent, trace: LiveTrace): LiveTrace {
