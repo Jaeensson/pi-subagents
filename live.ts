@@ -1,0 +1,144 @@
+/**
+ * live.ts — Pure live-trace state for watching running subagents.
+ *
+ * No runtime imports from pi packages: this module is unit-testable with
+ * `node --test` (Node >= 22.6 type stripping). Keep it to erasable
+ * TypeScript syntax only (no enums, no parameter properties).
+ */
+
+export const LIVE_TRACE_CAP_BYTES = 64 * 1024;
+
+export type TraceSegment =
+	| { kind: "thinking"; text: string }
+	| { kind: "text"; text: string }
+	| { kind: "toolCall"; name: string; args: Record<string, unknown> }
+	| { kind: "toolOutput"; text: string; isError?: boolean };
+
+export interface LiveTrace {
+	/** Chronological sealed segments. */
+	segments: TraceSegment[];
+	/** Approximate retained bytes (sealed segments + pending stream). */
+	bytes: number;
+	/** Segments evicted from the head by the ring-buffer cap. */
+	dropped: number;
+	/** Unsealed stream currently being built (thinking or text). */
+	pending: { kind: "thinking" | "text"; text: string } | null;
+	/** Bookkeeping: highest toolCall content-index emitted from message content. */
+	lastToolIndex: number;
+}
+
+export type StyleFn = (color: string, text: string) => string;
+export type FormatToolCallFn = (
+	name: string,
+	args: Record<string, unknown>,
+	style: StyleFn,
+) => string;
+
+interface JsonEvent {
+	type?: string;
+	message?: { content?: Array<Record<string, unknown>> };
+	assistantMessageEvent?: {
+		type?: string;
+		delta?: string;
+		content?: string;
+	};
+}
+
+export function emptyLiveTrace(): LiveTrace {
+	return { segments: [], bytes: 0, dropped: 0, pending: null, lastToolIndex: -1 };
+}
+
+function segmentBytes(seg: TraceSegment): number {
+	const payload =
+		seg.kind === "toolCall" ? `${seg.name}${JSON.stringify(seg.args)}` : seg.text;
+	return Buffer.byteLength(payload, "utf8");
+}
+
+function sealPending(trace: LiveTrace): void {
+	const pending = trace.pending;
+	if (!pending) return;
+	trace.pending = null;
+	if (!pending.text.trim()) return;
+	trace.segments.push(
+		pending.kind === "thinking"
+			? { kind: "thinking", text: pending.text }
+			: { kind: "text", text: pending.text },
+	);
+	// Bytes for pending text were already counted when appended.
+}
+
+/** Append a delta to the open thinking/text stream, sealing a prior stream of a different kind. */
+function appendStreamDelta(trace: LiveTrace, kind: "thinking" | "text", delta: string): void {
+	if (!delta) return;
+	if (!trace.pending || trace.pending.kind !== kind) {
+		sealPending(trace);
+		trace.pending = { kind, text: "" };
+	}
+	trace.pending.text += delta;
+	trace.bytes += Buffer.byteLength(delta, "utf8");
+}
+
+/** Handle one text/thinking stream event (`*_start`, `*_delta`, `*_end`). */
+function applyStreamDelta(trace: LiveTrace, kind: "thinking" | "text", dt: string, deltaText: string | undefined, content: string | undefined): void {
+	if (dt.endsWith("_start")) {
+		sealPending(trace);
+		trace.pending = { kind, text: "" };
+		return;
+	}
+	if (dt.endsWith("_delta")) {
+		appendStreamDelta(trace, kind, deltaText ?? "");
+		return;
+	}
+	// `*_end`: seal what we have. Adopt `content` ONLY when the same-kind stream
+	// is still pending AND empty (delta-less provider fallback). Never synthesize
+	// or disturb a different-kind pending: real providers emit `*_end` after the
+	// next stream already started (observed in spike), and the deltas already
+	// captured that content — adopting would duplicate/reorder segments.
+	if (content) {
+		if (trace.pending && trace.pending.kind === kind && !trace.pending.text) {
+			trace.pending.text = content;
+			trace.bytes += Buffer.byteLength(content, "utf8");
+		}
+	}
+	sealPending(trace);
+}
+
+function applyMessageUpdate(event: JsonEvent, trace: LiveTrace): LiveTrace {
+	const ame = event.assistantMessageEvent;
+	if (ame) {
+		const dt = ame.type;
+		const deltaText = typeof ame.delta === "string" ? ame.delta : undefined;
+		const content = typeof ame.content === "string" ? ame.content : undefined;
+		if (dt === "thinking_start" || dt === "thinking_delta" || dt === "thinking_end") {
+			applyStreamDelta(trace, "thinking", dt, deltaText, content);
+		} else if (dt === "text_start" || dt === "text_delta" || dt === "text_end") {
+			applyStreamDelta(trace, "text", dt, deltaText, content);
+		}
+	}
+	return trace;
+}
+
+/**
+ * Parse one child stdout line and reduce live-relevant events into trace.
+ * Never throws; non-live or malformed lines leave `trace` untouched.
+ */
+export function applyLiveEvent(line: string, trace: LiveTrace): LiveTrace {
+	if (!line.trim()) return trace;
+	let event: unknown;
+	try {
+		event = JSON.parse(line);
+	} catch {
+		return trace;
+	}
+	return reduceLiveEvent(event as JsonEvent, trace);
+}
+
+/** Pure reducer over a parsed event object (exported for direct unit tests). */
+export function reduceLiveEvent(event: JsonEvent, trace: LiveTrace): LiveTrace {
+	switch (event.type) {
+		case "message_update":
+			return applyMessageUpdate(event, trace);
+		default:
+			return trace;
+	}
+}

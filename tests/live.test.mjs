@@ -1,0 +1,93 @@
+/**
+ * Unit tests for live.ts — the pure live-trace reducer + renderer.
+ * Runs with: node --test tests/core.test.mjs tests/live.test.mjs
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, emptyLiveTrace, reduceLiveEvent } from "../live.ts";
+
+// Note: Task 6 extends this import with wrapToWidth, traceToLines, buildTraceView.
+
+const msgu = (ame, message) => ({
+	type: "message_update",
+	message: message ?? { role: "assistant", content: [] },
+	assistantMessageEvent: ame ? { contentIndex: 0, ...ame } : undefined,
+});
+
+test("emptyLiveTrace has the expected shape", () => {
+	const t = emptyLiveTrace();
+	assert.deepEqual(t.segments, []);
+	assert.equal(t.bytes, 0);
+	assert.equal(t.dropped, 0);
+	assert.equal(t.pending, null);
+});
+
+test("applyLiveEvent ignores empty, malformed, and unrelated lines", () => {
+	const t = emptyLiveTrace();
+	assert.equal(applyLiveEvent("", t), t);
+	assert.equal(applyLiveEvent("not json{{{", t), t);
+	assert.equal(applyLiveEvent(JSON.stringify({ type: "message_start", message: { role: "assistant", content: [] } }), t), t);
+	assert.equal(applyLiveEvent(JSON.stringify({ type: "tool_result_end", message: { role: "toolResult", content: [] } }), t), t);
+	assert.equal(t.segments.length, 0);
+});
+
+test("text deltas accumulate and seal into a text segment", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "Hello " }), t);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "world" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "Hello world" }), t);
+	assert.deepEqual(t.segments, [{ kind: "text", text: "Hello world" }]);
+	assert.equal(t.pending, null);
+});
+
+test("thinking deltas accumulate and seal into a thinking segment", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "Let me think" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_end", content: "Let me think" }), t);
+	assert.deepEqual(t.segments, [{ kind: "thinking", text: "Let me think" }]);
+});
+
+test("a new stream seals the previous one (thinking then text order)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "why?" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t); // seals thinking
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "Because." }), t);
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "Because." }), t); // seals text
+	const kinds = t.segments.map((s) => s.kind);
+	assert.deepEqual(kinds, ["thinking", "text"]);
+	assert.equal(t.segments[0].text, "why?");
+});
+
+test("end events adopt content when the stream emitted no deltas", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "only-end-content" }), t);
+	assert.deepEqual(t.segments, [{ kind: "text", text: "only-end-content" }]);
+});
+
+test("end content is ignored when the stream was already sealed by a boundary (out-of-order end events)", () => {
+	// Real capture: thinking deltas, then text_start, then a late thinking_end.
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "Think" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t); // seals thinking from deltas
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "done" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_end", content: "Think" }), t); // arrives late — must not duplicate
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "done" }), t);
+	assert.deepEqual(t.segments, [
+		{ kind: "thinking", text: "Think" },
+		{ kind: "text", text: "done" },
+	]);
+});
+
+test("whitespace-only streams never produce segments", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "   " }), t);
+	t = reduceLiveEvent(msgu({ type: "thinking_end" }), t);
+	assert.deepEqual(t.segments, []);
+	assert.equal(t.pending, null);
+});
