@@ -16,14 +16,24 @@ and doing while it runs.
 ## Key finding (drives the design)
 
 The live data already flows. Children serialize **every** session event to
-stdout as one JSON line per event (print-mode `--mode json` path), including:
+stdout as one JSON line per event (print-mode `--mode json` path). Empirically
+verified on a real child capture (pi 0.84.1):
 
-- `message_update` — fired token-by-token during streaming, carrying
-  `assistantMessageEvent` deltas: `text_delta`, `thinking_delta`,
-  `toolcall_delta` (and `*_end` events with the accumulated `content` /
-  `toolCall`), plus the accumulated partial message.
-- `tool_execution_start / _update / _end` — partial tool output (e.g. bash
-  output while a command is still running).
+- `message_update` — fired token-by-token during streaming; on stdout it
+  carries ONLY `{ type, assistantMessageEvent }` (the cumulative partial
+  `message` exists only in-process; `toJsonEvent` drops it — rpc.md calls it
+  the "former cumulative message"):
+  - `text_start/delta/end`, `thinking_start/delta/end` (delta strings; `*_end`
+    carries the accumulated `content`),
+  - `toolcall_start/delta/end` — `toolcall_end` carries a COMPLETE
+    `toolCall` `{ id, name, arguments }` (arguments may be an object or a
+    JSON string), which is the live tool-call source.
+- `tool_execution_start / _update / _end` — partial tool output. On stdout,
+  `partialResult`/`result` are SNAPSHOT objects `{ content: [{ type:"text",
+  text }] }` (each update repeats the cumulative output — REPLACE, never
+  append); `_end` carries `isError`.
+- `message_end` — carries the full `message` with `content` parts, including
+  complete `toolCall` parts (reconcile source).
 
 `applyEventLine` (core.ts) currently drops all of it — it only records
 completed `message_end` messages and `tool_result_end`. The work is therefore
@@ -98,16 +108,23 @@ interface LiveTrace {
     Delta strings (`delta`) accumulate into `pending`; `*_start` events carry
     no delta but are **boundary signals that seal the previous stream**;
     `*_end` events carry `content`/`toolCall` and seal the current one.
-  - `tool_execution_start / _update / _end` → `toolOutput` segments (live
-    partial output; `_end` carries the final result and `isError`).
-- **Sealing boundaries** (driven by the `*_start` events above):
+    `toolcall_end` emits a `toolCall` segment from its `toolCall` field
+    (deduped by `contentIndex`).
+  - `tool_execution_start / _update / _end` → `toolOutput` segments. On the
+    real wire `partialResult`/`result` are cumulative SNAPSHOT objects
+    `{ content: [{ type: "text", text }] }` — the open segment's text is
+    REPLACED by each new snapshot, never appended (`_end` also sets
+    `isError`).
+- **Sealing boundaries** (driven by the `*_start`/`toolcall_*` events above):
   `thinking_start` seals any pending text; `text_start` seals pending
-  thinking; `toolcall_start` seals pending thinking *and* pending text.
-  The final `message_end` reconcile seals anything still pending.
+  thinking; `toolcall_start`/`toolcall_delta`/`toolcall_end` seal pending
+  thinking *and* text. The final `message_end` reconcile seals anything still
+  pending.
 - **Completeness reconcile**: on `message_end` (already consumed by
-  core.ts `applyEventLine`), reconcile the trace tail against the final
-  message content so the pane always shows everything even if a delta was
-  missed. Handles the case where providers emit only start/end with no deltas.
+  core.ts `applyEventLine`), scan the full message's `toolCall` content parts
+  and emit any content index not yet emitted (deltas/`toolcall_end` may have
+  been missed), then reset the content index for the next message. The final
+  truth also lives in core's own `messages`.
 - **Ring-buffer cap**: `LIVE_TRACE_CAP_BYTES = 64 * 1024` per task. When over
   cap, drop whole segments from the head and count them in `dropped`. Memory
   stays bounded; reasoning never re-enters model context.

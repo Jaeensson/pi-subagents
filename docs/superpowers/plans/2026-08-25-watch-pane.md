@@ -344,87 +344,120 @@ git commit -m "feat(watch): live-trace state — text/thinking stream reducer (p
 
 ---
 
-## Task 3: Tool calls from message content (dedupe + reset per message)
+## Task 3: ToolCall segments from `toolcall_end` (live) + `message_end` reconcile
+
+**Wire truth (verified spike):** on stdout, `message_update` carries ONLY
+`{ type, assistantMessageEvent }` — never a `message`. Tool calls appear live
+via `assistantMessageEvent.type === "toolcall_end"` with a COMPLETE
+`toolCall` `{ id, name, arguments }` (arguments object or JSON string).
+`message_end` carries the full `message.content`, whose `toolCall` parts are
+the reconcile source (emit any index never streamed), after which the content
+index resets for the next message.
 
 **Files:**
-- Modify: `live.ts` (`scanToolCalls`, `parseArgs`, message_end reconcile; wire into `reduceLiveEvent`)
+- Modify: `live.ts` (`emitToolCall`, `scanToolCalls`, `parseArgs`; extend `JsonEvent`; wire into `applyMessageUpdate`/`applyMessageEnd`)
 - Test: `tests/live.test.mjs`
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/live.test.mjs`)
+- [ ] **Step 1: Rewrite the toolCall tests** (replace the existing 4 toolCall tests in `tests/live.test.mjs` with these; keep the "message_end seals any still-open stream" test unchanged):
 
 ```js
-const toolPart = (name, args, index = 0) => ({ type: "toolCall", name, arguments: args });
+const toolCall = (name, args) => ({ type: "toolCall", name, arguments: args });
 
-test("toolCall parts in message content become toolCall segments (args JSON string parsed)", () => {
+test("toolcall_end emits a toolCall segment from its toolCall field (args object)", () => {
 	let t = emptyLiveTrace();
-	t = reduceLiveEvent(msgu({ type: "toolcall_start" }, { role: "assistant", content: [toolPart("grep", '{"pattern":"modelTiers"}')] }), t);
-	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "grep", args: { pattern: "modelTiers" } }]);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", toolCall: { id: "c1", name: "bash", arguments: { command: "ls" } } }), t);
+	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "bash", args: { command: "ls" } }]);
 });
 
-test("the same content index is not emitted twice per message", () => {
+test("toolcall_end with string JSON arguments parses them into an object", () => {
 	let t = emptyLiveTrace();
-	const msg = { role: "assistant", content: [toolPart("grep", '{"pattern":"x"}')] };
-	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, msg), t);
-	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, msg), t);
-	t = reduceLiveEvent({ type: "message_end", message: msg }, t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", toolCall: { id: "c1", name: "grep", arguments: '{"pattern":"x"}' } }), t);
+	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "grep", args: { pattern: "x" } }]);
+});
+
+test("the same contentIndex is not emitted twice; message_end does not duplicate it", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 1, toolCall: { name: "grep", arguments: { pattern: "x" } } }), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 1, toolCall: { name: "grep", arguments: { pattern: "x" } } }), t);
+	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolCall("grep", { pattern: "x" })] } }, t);
 	assert.equal(t.segments.length, 1);
+});
+
+test("message_end reconcile emits toolCall parts whose index was never streamed", () => {
+	let t = emptyLiveTrace();
+	// no toolcall_end was streamed; only the final message has the part
+	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolCall("read", { path: "a.ts" })] } }, t);
+	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "read", args: { path: "a.ts" } }]);
 });
 
 test("message_end resets the content index for the next message", () => {
 	let t = emptyLiveTrace();
-	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, { role: "assistant", content: [toolPart("read", '{"path":"a.ts"}')] }), t);
-	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolPart("read", '{"path":"a.ts"}')] } }, t);
-	// next assistant message starts its content array at index 0 again
-	t = reduceLiveEvent(msgu({ type: "toolcall_start" }, { role: "assistant", content: [toolPart("bash", '{"command":"npm test"}')] }), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "read", arguments: '{"path":"a.ts"}' } }), t);
+	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolCall("read", { path: "a.ts" })] } }, t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "bash", arguments: '{"command":"npm test"}' } }), t);
 	assert.deepEqual(t.segments.map((s) => s.name), ["read", "bash"]);
 });
 
-test("toolCall with non-string arguments is passed through", () => {
+test("toolcall_start seals any open stream; toolcall_end emits after it", () => {
 	let t = emptyLiveTrace();
-	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, { role: "assistant", content: [toolPart("edit", { path: "a.ts", edits: [] })] }), t);
-	assert.deepEqual(t.segments[0].args, { path: "a.ts", edits: [] });
-});
-
-test("message_end seals any still-open stream", () => {
-	let t = emptyLiveTrace();
-	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
-	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "trailing" }), t);
-	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "trailing" }] } }, t);
-	assert.deepEqual(t.segments, [{ kind: "text", text: "trailing" }]);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "checking" }), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_start", contentIndex: 0 }), t); // seals text
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "bash", arguments: { command: "ls" } } }), t);
+	assert.deepEqual(t.segments.map((s) => s.kind), ["text", "toolCall"]);
 });
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-npm test
+node --test tests/core.test.mjs tests/live.test.mjs
 ```
 
-Expected: FAIL — `scanToolCalls` not implemented; toolCall tests fail (empty segments).
+Expected: the five new/replaced toolCall tests FAIL (no `emitToolCall`; old message-scanning code does not fire on `message_update` without `message`).
 
-- [ ] **Step 3: Implement tool-call scanning + message_end reconcile**
+- [ ] **Step 3: Implement the real-wire toolCall handling**
 
-In `live.ts`:
+In `live.ts`, extend `JsonEvent`:
 
-- Add `toolCall` handling to `applyMessageUpdate` (always scan, even during text streams):
+```ts
+interface JsonEvent {
+	type?: string;
+	message?: { content?: Array<Record<string, unknown>> };
+	assistantMessageEvent?: {
+		type?: string;
+		delta?: string;
+		content?: string;
+		contentIndex?: number;
+		toolCall?: { name?: unknown; arguments?: unknown };
+	};
+}
+```
+
+Replace `applyMessageUpdate` (tool-call branch seals the open stream; only `toolcall_end` emits):
 
 ```ts
 function applyMessageUpdate(event: JsonEvent, trace: LiveTrace): LiveTrace {
 	const ame = event.assistantMessageEvent;
-	if (ame) {
-		const dt = ame.type;
-		const deltaText = typeof ame.delta === "string" ? ame.delta : undefined;
-		const content = typeof ame.content === "string" ? ame.content : undefined;
-		if (dt === "thinking_start" || dt === "thinking_delta" || dt === "thinking_end") {
-			applyStreamDelta(trace, "thinking", dt, deltaText, content);
-		} else if (dt === "text_start" || dt === "text_delta" || dt === "text_end") {
-			applyStreamDelta(trace, "text", dt, deltaText, content);
-		}
+	if (!ame) return trace;
+	const dt = ame.type;
+	const deltaText = typeof ame.delta === "string" ? ame.delta : undefined;
+	const content = typeof ame.content === "string" ? ame.content : undefined;
+	if (dt === "thinking_start" || dt === "thinking_delta" || dt === "thinking_end") {
+		applyStreamDelta(trace, "thinking", dt, deltaText, content);
+	} else if (dt === "text_start" || dt === "text_delta" || dt === "text_end") {
+		applyStreamDelta(trace, "text", dt, deltaText, content);
+	} else if (dt === "toolcall_start" || dt === "toolcall_delta" || dt === "toolcall_end") {
+		// A tool call begins after any open thinking/text stream.
+		sealPending(trace);
+		if (dt === "toolcall_end") emitToolCall(ame, trace);
 	}
-	scanToolCalls(event.message, trace);
 	return trace;
 }
+```
 
+Replace `scanToolCalls`/`parseArgs` and add `emitToolCall` (keep `parseArgs` exactly as before):
+
+```ts
 function parseArgs(raw: unknown): Record<string, unknown> {
 	if (raw && typeof raw === "object" && !Array.isArray(raw)) {
 		return raw as Record<string, unknown>;
@@ -442,13 +475,25 @@ function parseArgs(raw: unknown): Record<string, unknown> {
 	return { raw: String(raw ?? "") };
 }
 
-/** Emit a toolCall segment for each content part not yet emitted (dedupe by content index). */
+/** Emit a toolCall segment from a streamed toolcall_end, deduped by content index. */
+function emitToolCall(ame: NonNullable<JsonEvent["assistantMessageEvent"]>, trace: LiveTrace): void {
+	const idx = typeof ame.contentIndex === "number" ? ame.contentIndex : 0;
+	if (idx <= trace.lastToolIndex) return;
+	const tc = ame.toolCall;
+	if (!tc) return;
+	const name = typeof tc.name === "string" && tc.name ? tc.name : "?";
+	const args = parseArgs(tc.arguments);
+	trace.lastToolIndex = idx;
+	trace.segments.push({ kind: "toolCall", name, args });
+	trace.bytes += segmentBytes({ kind: "toolCall", name, args });
+}
+
+/** Reconcile at message_end: emit toolCall content parts whose index was never streamed. */
 function scanToolCalls(message: { content?: Array<Record<string, unknown>> } | undefined, trace: LiveTrace): void {
 	if (!message?.content) return;
-	const content = message.content;
-	for (let i = 0; i < content.length; i++) {
+	for (let i = 0; i < message.content.length; i++) {
 		if (i <= trace.lastToolIndex) continue;
-		const part = content[i];
+		const part = message.content[i];
 		if (!part || part.type !== "toolCall") continue;
 		trace.lastToolIndex = i;
 		const name = typeof part.name === "string" && part.name ? part.name : "?";
@@ -457,8 +502,11 @@ function scanToolCalls(message: { content?: Array<Record<string, unknown>> } | u
 		trace.bytes += segmentBytes({ kind: "toolCall", name, args });
 	}
 }
+```
 
-/** Reconcile at message end: seal open streams, emit remaining toolCalls, reset the content index. */
+Replace `applyMessageEnd` (unchanged shape — seal, reconcile scan, reset index):
+
+```ts
 function applyMessageEnd(event: JsonEvent, trace: LiveTrace): LiveTrace {
 	sealPending(trace);
 	scanToolCalls(event.message, trace);
@@ -467,101 +515,109 @@ function applyMessageEnd(event: JsonEvent, trace: LiveTrace): LiveTrace {
 }
 ```
 
-- Extend `reduceLiveEvent`:
-
-```ts
-export function reduceLiveEvent(event: JsonEvent, trace: LiveTrace): LiveTrace {
-	switch (event.type) {
-		case "message_update":
-			return applyMessageUpdate(event, trace);
-		case "message_end":
-			return applyMessageEnd(event, trace);
-		default:
-			return trace;
-	}
-}
-```
+`reduceLiveEvent` already has the `message_update` and `message_end` cases — no change there.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-npm test
+node --test tests/core.test.mjs tests/live.test.mjs
+npm run typecheck
 ```
 
-Expected: PASS.
+Expected: all pass (85 core + 20 live); typecheck exit 0 (live.ts still not in tsconfig include — expected until Task 7).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add live.ts tests/live.test.mjs
-git commit -m "feat(watch): toolCall segments from message content — dedupe + per-message index reset"
+git commit -m "feat(watch): toolCall segments from toolcall_end + message_end reconcile (real wire shapes)"
 ```
 
----
 
-## Task 4: Tool execution segments (live partial output)
+## Task 4: ToolOutput segments from `tool_execution_*` (snapshot replace)
+
+**Wire truth (verified spike):** `tool_execution_update.partialResult` and
+`tool_execution_end.result` are cumulative SNAPSHOT objects
+`{ content: [{ type: "text", text }] }` — each update repeats the full output
+so far (verified lens 0 → 195 → 620; end = 620). The open toolOutput
+segment's text is therefore REPLACED by each new snapshot, never appended.
+`tool_execution_end` carries `isError`.
 
 **Files:**
-- Modify: `live.ts` (`applyToolExecution`, `appendToolOutput`, wire into `reduceLiveEvent`)
+- Modify: `live.ts` (`toolResultText`, `setOpenToolOutput`, `applyToolExecution`; wire into `reduceLiveEvent`)
 - Test: `tests/live.test.mjs`
 
-- [ ] **Step 1: Write the failing tests** (append)
+- [ ] **Step 1: Write the failing tests** (append; helper `execEv` + snapshot builder first):
 
 ```js
 const execEv = (type, extra = {}) => ({ type, toolCallId: "t1", toolName: "bash", args: { command: "npm test" }, ...extra });
+const textSnap = (text) => ({ content: [{ type: "text", text }] });
 
-test("tool execution partial updates accumulate into a toolOutput segment", () => {
-	let t = emptyLiveTrace();
-	t = reduceLiveEvent(execEv("tool_execution_start", { toolCallId: "t1" }), t);
-	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: "npm " }), t);
-	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: "test" }), t);
-	assert.equal(t.segments[t.segments.length - 1].kind, "toolOutput");
-	assert.equal(t.segments[t.segments.length - 1].text, "npm test");
-});
-
-test("tool execution end appends the final result and flags errors", () => {
+test("tool execution updates REPLACE the open toolOutput segment with the cumulative snapshot", () => {
 	let t = emptyLiveTrace();
 	t = reduceLiveEvent(execEv("tool_execution_start"), t);
-	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: "ok\n" }), t);
-	t = reduceLiveEvent(execEv("tool_execution_end", { result: "ok\n", isError: false }), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("npm ") }), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("npm test") }), t);
 	const seg = t.segments[t.segments.length - 1];
 	assert.equal(seg.kind, "toolOutput");
-	assert.equal(seg.isError, false);
-	// result already present at tail → not duplicated
-	assert.equal(seg.text, "ok\n");
+	assert.equal(seg.text, "npm test"); // replaced, not "npm npm test"
 });
 
-test("tool execution end appends a result that was never streamed", () => {
+test("tool execution start with no updates leaves an empty open segment", () => {
 	let t = emptyLiveTrace();
 	t = reduceLiveEvent(execEv("tool_execution_start"), t);
-	t = reduceLiveEvent(execEv("tool_execution_end", { result: "boom", isError: true }), t);
+	const seg = t.segments[t.segments.length - 1];
+	assert.equal(seg.kind, "toolOutput");
+	assert.equal(seg.text, "");
+});
+
+test("tool execution end replaces text with the final result and flags isError", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("ok") }), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("ok"), isError: false }), t);
+	const seg = t.segments[t.segments.length - 1];
+	assert.equal(seg.text, "ok");
+	assert.equal(seg.isError, false);
+});
+
+test("tool execution end delivers a result never streamed", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("boom"), isError: true }), t);
 	const seg = t.segments[t.segments.length - 1];
 	assert.equal(seg.text, "boom");
 	assert.equal(seg.isError, true);
+});
+
+test("tool execution partial result may be a plain string (defensive)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: "plain" }), t);
+	assert.equal(t.segments[t.segments.length - 1].text, "plain");
+});
+
+test("empty snapshot content renders as empty text (no JSON fallback noise)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [] } }), t);
+	assert.equal(t.segments[t.segments.length - 1].text, "");
 });
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-npm test
+node --test tests/core.test.mjs tests/live.test.mjs
 ```
 
-Expected: FAIL — `tool_execution_*` events ignored.
+Expected: FAIL — `tool_execution_*` events are ignored (no `applyToolExecution`); the string-based append tests from the old Task 4 (if any remain in the file from a previous run — remove them; this is the first run of the corrected spec) are absent.
 
-- [ ] **Step 3: Implement tool execution handling**
+- [ ] **Step 3: Implement snapshot-replace tool execution handling**
 
-In `live.ts`:
+In `live.ts`, add (and extend `applyToolExecution` existing stubs — none exist yet; add all):
 
 ```ts
-function appendToolOutput(trace: LiveTrace, delta: string): void {
-	if (!delta) return;
-	const seg = lastSegment(trace);
-	if (!seg || seg.kind !== "toolOutput") return;
-	seg.text += delta;
-	trace.bytes += Buffer.byteLength(delta, "utf8");
-}
-
 /** Last segment if it exists (search backwards for the newest toolOutput). */
 function lastToolOutputSegment(trace: LiveTrace): TraceSegment | null {
 	for (let i = trace.segments.length - 1; i >= 0; i--) {
@@ -570,30 +626,62 @@ function lastToolOutputSegment(trace: LiveTrace): TraceSegment | null {
 	return null;
 }
 
+/**
+ * Extract renderable text from a tool result. Real wires send snapshot objects
+ * `{ content: [{ type: "text", text }] }`; a plain string is passed through;
+ * anything else JSON-stringifies (empty content arrays → "").
+ */
+function toolResultText(raw: unknown): string {
+	if (typeof raw === "string") return raw;
+	if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+		const content = (raw as Record<string, unknown>).content;
+		if (Array.isArray(content)) {
+			let out = "";
+			for (const part of content) {
+				if (part && typeof part === "object" && (part as Record<string, unknown>).type === "text") {
+					const text = (part as Record<string, unknown>).text;
+					if (typeof text === "string") out += text;
+				}
+			}
+			return out;
+		}
+	}
+	try {
+		return JSON.stringify(raw ?? "");
+	} catch {
+		return String(raw ?? "");
+	}
+}
+
+/** Replace the open toolOutput segment's text (snapshots, not deltas), keeping bytes accurate. */
+function setOpenToolOutput(trace: LiveTrace, text: string): void {
+	const seg = lastToolOutputSegment(trace);
+	if (!seg) return;
+	const old = seg.text;
+	if (old === text) return;
+	seg.text = text;
+	const deltaBytes = Buffer.byteLength(text, "utf8") - Buffer.byteLength(old, "utf8");
+	trace.bytes += deltaBytes;
+}
+
 function applyToolExecution(evType: string, event: Record<string, unknown>, trace: LiveTrace): LiveTrace {
 	if (evType === "tool_execution_start") {
 		trace.segments.push({ kind: "toolOutput", text: "" });
 		return trace;
 	}
 	if (evType === "tool_execution_update") {
-		const partial = event.partialResult;
-		if (typeof partial === "string") appendToolOutput(trace, partial);
+		setOpenToolOutput(trace, toolResultText(event.partialResult));
 		return trace;
 	}
 	// tool_execution_end
+	setOpenToolOutput(trace, toolResultText(event.result));
 	const seg = lastToolOutputSegment(trace);
-	if (seg) {
-		const result = event.result;
-		if (typeof result === "string" && result && !seg.text.endsWith(result)) {
-			appendToolOutput(trace, seg.text ? `\n${result}` : result);
-		}
-		seg.isError = event.isError === true;
-	}
+	if (seg) seg.isError = event.isError === true;
 	return trace;
 }
 ```
 
-- Extend `reduceLiveEvent`:
+Extend `reduceLiveEvent`:
 
 ```ts
 	case "tool_execution_start":
@@ -605,19 +693,19 @@ function applyToolExecution(evType: string, event: Record<string, unknown>, trac
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-npm test
+node --test tests/core.test.mjs tests/live.test.mjs
+npm run typecheck
 ```
 
-Expected: PASS.
+Expected: all pass (85 core + 26 live); typecheck exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add live.ts tests/live.test.mjs
-git commit -m "feat(watch): toolOutput segments from live tool execution events"
+git commit -m "feat(watch): toolOutput segments from tool_execution events — snapshot replace semantics"
 ```
 
----
 
 ## Task 5: Ring-buffer cap with dropped counter
 
@@ -746,7 +834,7 @@ test("traceToLines renders thinking, text, toolCall, toolOutput with styles", ()
 	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "hi" }), t);
 	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, { role: "assistant", content: [toolPart("bash", '{"command":"ls"}')] }), t);
 	t = reduceLiveEvent(execEv("tool_execution_start"), t);
-	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: "out" }), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [{ type: "text", text: "out" }] } }), t);
 	const lines = traceToLines(t, { width: 60, style, formatToolCall: fmtCall });
 	assert.deepEqual(lines, [
 		`<dim>⠿ plan</dim>`,
