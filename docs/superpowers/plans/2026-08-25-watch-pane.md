@@ -76,7 +76,9 @@ Create `tests/live.test.mjs` with the scaffold + stream tests. (Mirrors `tests/c
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, buildTraceView, emptyLiveTrace, reduceLiveEvent, traceToLines, wrapToWidth } from "../live.ts";
+import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, emptyLiveTrace, reduceLiveEvent } from "../live.ts";
+
+// Note: Task 6 extends this import with wrapToWidth, traceToLines, buildTraceView.
 
 const msgu = (ame, message) => ({
 	type: "message_update",
@@ -805,7 +807,13 @@ Expected: FAIL — `wrapToWidth`/`traceToLines`/`buildTraceView` not exported.
 
 - [ ] **Step 3: Implement the renderer**
 
-In `live.ts` (append; `StyleFn`/`FormatToolCallFn` already declared):
+In `live.ts` (append; `StyleFn`/`FormatToolCallFn` already declared). First extend the test-file import line (add the renderer names):
+
+```js
+import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, buildTraceView, emptyLiveTrace, reduceLiveEvent, traceToLines, wrapToWidth } from "../live.ts";
+```
+
+Then add the renderer functions:
 
 ```ts
 /** Wrap raw text to a width, preserving existing newlines (no ANSI handling — style after). */
