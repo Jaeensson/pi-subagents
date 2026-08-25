@@ -15,5 +15,5 @@
     "noUnusedParameters": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["index.ts", "agents.ts", "core.ts", "runtime.ts", "process.ts", "jobs.ts", "tui.ts", "tools/*.ts"]
+  "include": ["index.ts", "agents.ts", "core.ts", "live.ts", "runtime.ts", "process.ts", "jobs.ts", "tui.ts", "watch.ts", "tools/*.ts"]
 }

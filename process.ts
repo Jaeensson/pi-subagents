@@ -19,6 +19,8 @@ import {
 	resolveModel,
 	type AgentSummary,
 } from "./core.ts";
+import { applyLiveEvent, emptyLiveTrace } from "./live.ts";
+import { maybeAutoCloseWatch } from "./watch.ts";
 import {
 	checkJobComplete,
 	decRunningCount,
@@ -82,6 +84,7 @@ function finalizeTask(task: Task, code: number | null) {
 	cleanupTaskTemp(task);
 	decRunningCount();
 	updateStatusWidget();
+	maybeAutoCloseWatch();
 	fireWaiters(taskWaiters, task.id);
 
 	const job = jobs.get(task.jobId);
@@ -141,6 +144,7 @@ export async function spawnTask(
 		startedAt: Date.now(),
 		exitCode: -1,
 		messages: [],
+		live: emptyLiveTrace(),
 		stderr: "",
 		usage: emptyUsage(),
 		model: resolution.model,
@@ -185,6 +189,7 @@ export async function spawnTask(
 			const lines = buffer.split("\n");
 			buffer = lines.pop() ?? "";
 			for (const line of lines) {
+				task.live = applyLiveEvent(line, task.live);
 				applyEventLine(line, task);
 				job?.emit?.(getFinalOutput(task.messages) || "(running...)", jobDetails(job));
 			}

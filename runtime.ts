@@ -20,6 +20,7 @@ import {
 	type TierConfig,
 	type UsageStats,
 } from "./core.ts";
+import type { LiveTrace } from "./live.ts";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,8 @@ export interface Task {
 	startedAt: number;
 	exitCode: number;
 	messages: MessageLike[];
+	/** Live streaming trace (thinking/text/tool activity) for the watch pane. */
+	live: LiveTrace;
 	stderr: string;
 	usage: UsageStats;
 	model?: string;

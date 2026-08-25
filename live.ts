@@ -46,6 +46,10 @@ interface JsonEvent {
 		contentIndex?: number;
 		toolCall?: { name?: unknown; arguments?: unknown };
 	};
+	toolCallId?: unknown;
+	partialResult?: unknown;
+	result?: unknown;
+	isError?: unknown;
 }
 
 export function emptyLiveTrace(): LiveTrace {
@@ -206,7 +210,10 @@ function applyMessageEnd(event: JsonEvent, trace: LiveTrace): LiveTrace {
 }
 
 /** Newest toolOutput; exact toolCallId match preferred, newest unmatched as fallback. */
-function lastToolOutputSegment(trace: LiveTrace, toolCallId?: string): TraceSegment | null {
+function lastToolOutputSegment(
+	trace: LiveTrace,
+	toolCallId?: string,
+): { kind: "toolOutput"; text: string; isError?: boolean; toolCallId?: string } | null {
 	if (toolCallId !== undefined) {
 		for (let i = trace.segments.length - 1; i >= 0; i--) {
 			const s = trace.segments[i];
@@ -214,7 +221,8 @@ function lastToolOutputSegment(trace: LiveTrace, toolCallId?: string): TraceSegm
 		}
 	}
 	for (let i = trace.segments.length - 1; i >= 0; i--) {
-		if (trace.segments[i].kind === "toolOutput") return trace.segments[i];
+		const s = trace.segments[i];
+		if (s.kind === "toolOutput") return s;
 	}
 	return null;
 }
@@ -259,7 +267,7 @@ function setOpenToolOutput(trace: LiveTrace, text: string, toolCallId?: string):
 	enforceCap(trace);
 }
 
-function applyToolExecution(evType: string, event: Record<string, unknown>, trace: LiveTrace): LiveTrace {
+function applyToolExecution(evType: string, event: JsonEvent, trace: LiveTrace): LiveTrace {
 	const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
 	if (evType === "tool_execution_start") {
 		trace.segments.push({ kind: "toolOutput", text: "", toolCallId: id });

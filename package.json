@@ -9,7 +9,7 @@
     "extensions": ["./index.ts"]
   },
   "scripts": {
-    "test": "node --test tests/core.test.mjs",
+    "test": "node --test tests/core.test.mjs tests/live.test.mjs",
     "typecheck": "tsc --noEmit"
   }
 }
