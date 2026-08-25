@@ -58,6 +58,15 @@ function segmentBytes(seg: TraceSegment): number {
 	return Buffer.byteLength(payload, "utf8");
 }
 
+/** Evict whole segments from the head while over cap. Never evicts `pending`. */
+function enforceCap(trace: LiveTrace): void {
+	while (trace.bytes > LIVE_TRACE_CAP_BYTES && trace.segments.length > 0) {
+		const head = trace.segments.shift()!;
+		trace.bytes = Math.max(0, trace.bytes - segmentBytes(head));
+		trace.dropped++;
+	}
+}
+
 function sealPending(trace: LiveTrace): void {
 	const pending = trace.pending;
 	if (!pending) return;
@@ -72,6 +81,7 @@ function sealPending(trace: LiveTrace): void {
 			: { kind: "text", text: pending.text },
 	);
 	// Bytes for pending text were already counted when appended.
+	enforceCap(trace);
 }
 
 /** Append a delta to the open thinking/text stream, sealing a prior stream of a different kind. */
@@ -83,6 +93,7 @@ function appendStreamDelta(trace: LiveTrace, kind: "thinking" | "text", delta: s
 	}
 	trace.pending.text += delta;
 	trace.bytes += Buffer.byteLength(delta, "utf8");
+	enforceCap(trace);
 }
 
 /** Handle one text/thinking stream event (`*_start`, `*_delta`, `*_end`). */
@@ -165,6 +176,7 @@ function emitToolCall(ame: NonNullable<JsonEvent["assistantMessageEvent"]>, trac
 	trace.emittedToolIndices.add(idx);
 	trace.segments.push({ kind: "toolCall", name, args });
 	trace.bytes += segmentBytes({ kind: "toolCall", name, args });
+	enforceCap(trace);
 }
 
 /** Reconcile at message_end: emit toolCall content parts whose index was never streamed. */
@@ -180,6 +192,7 @@ function scanToolCalls(message: { content?: Array<Record<string, unknown>> } | u
 		const args = parseArgs(part.arguments);
 		trace.segments.push({ kind: "toolCall", name, args });
 		trace.bytes += segmentBytes({ kind: "toolCall", name, args });
+		enforceCap(trace);
 	}
 }
 
@@ -243,6 +256,7 @@ function setOpenToolOutput(trace: LiveTrace, text: string, toolCallId?: string):
 	seg.text = text;
 	const deltaBytes = Buffer.byteLength(text, "utf8") - Buffer.byteLength(old, "utf8");
 	trace.bytes += deltaBytes;
+	enforceCap(trace);
 }
 
 function applyToolExecution(evType: string, event: Record<string, unknown>, trace: LiveTrace): LiveTrace {

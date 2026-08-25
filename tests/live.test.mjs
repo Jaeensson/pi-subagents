@@ -356,3 +356,33 @@ test("tool execution update without partialResult does not blank the segment", (
 	t = reduceLiveEvent(execEv("tool_execution_update", {}), t);
 	assert.equal(t.segments[t.segments.length - 1].text, "keep");
 });
+
+test("ring buffer evicts oldest segments once over the byte cap", () => {
+	let t = emptyLiveTrace();
+	const chunk = "x".repeat(4096);
+	for (let i = 0; i < 20; i++) {
+		t = reduceLiveEvent(msgu({ type: "text_start", contentIndex: i }), t);
+		t = reduceLiveEvent(msgu({ type: "text_delta", delta: chunk, contentIndex: i }), t);
+		t = reduceLiveEvent(msgu({ type: "text_end", content: chunk, contentIndex: i }), t);
+		t = reduceLiveEvent(msgu({ type: "text_end", content: chunk, contentIndex: i }), t);
+	}
+	// 20 × ~4KB > 64KB cap → oldest segments evicted
+	assert.ok(t.dropped > 0, "expected dropped > 0");
+	assert.ok(t.bytes <= LIVE_TRACE_CAP_BYTES || t.segments.length === 0, "bytes over cap with segments remaining");
+	// the newest segment survives
+	assert.ok(t.segments.length > 0);
+	assert.equal(t.segments[t.segments.length - 1].text, chunk);
+});
+
+test("toolOutput snapshot over the cap evicts to keep bytes bounded", () => {
+	let t = emptyLiveTrace();
+	const big = "y".repeat(40 * 1024);
+	t = reduceLiveEvent(execEv("tool_execution_start", {}, "a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [{ type: "text", text: big }] } }, "a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_start", {}, "b"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [{ type: "text", text: big }] } }, "b"), t);
+	// two ~40KB snapshots > 64KB cap → head evicted, newest (b) survives
+	assert.ok(t.dropped >= 1, "expected eviction");
+	assert.ok(t.segments.some((s) => s.kind === "toolOutput" && s.toolCallId === "b"));
+	assert.ok(t.bytes <= LIVE_TRACE_CAP_BYTES || t.segments.length === 0);
+});
