@@ -4,9 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, emptyLiveTrace, reduceLiveEvent } from "../live.ts";
-
-// Note: Task 6 extends this import with wrapToWidth, traceToLines, buildTraceView.
+import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, buildTraceView, emptyLiveTrace, reduceLiveEvent, traceToLines, wrapToWidth } from "../live.ts";
 
 const msgu = (ame, message) => ({
 	type: "message_update",
@@ -423,4 +421,90 @@ test("toolCall segments are evictable when over cap", () => {
 	assert.ok(t.dropped >= 1, "expected eviction");
 	assert.ok(t.segments.some((s) => s.kind === "toolCall" && s.name === "t1"));
 	assert.ok(t.bytes <= LIVE_TRACE_CAP_BYTES || t.segments.length === 0);
+});
+
+const style = (color, text) => `<${color}>${text}</${color}>`;
+const fmtCall = (name, args, s) => s("accent", `→ ${name} ${JSON.stringify(args)}`);
+
+test("wrapToWidth splits long lines and preserves short ones", () => {
+	assert.deepEqual(wrapToWidth("abcd", 4), ["abcd"]);
+	assert.deepEqual(wrapToWidth("abcdefgh", 4), ["abcd", "efgh"]);
+	assert.deepEqual(wrapToWidth("ab\ncdef", 3), ["ab", "cde", "f"]);
+	assert.deepEqual(wrapToWidth("x", 0), []);
+});
+
+test("traceToLines renders thinking, text, toolCall, toolOutput with styles", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "plan" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t); // seals thinking
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "hi" }), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end", contentIndex: 0, toolCall: { name: "bash", arguments: { command: "ls" } } }), t); // seals text, emits toolCall
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [{ type: "text", text: "out" }] } }), t);
+	const lines = traceToLines(t, { width: 60, style, formatToolCall: fmtCall });
+	assert.deepEqual(lines, [
+		`<dim>⠿ plan</dim>`,
+		`<toolOutput>hi</toolOutput>`,
+		`<accent>→ bash ${JSON.stringify({ command: "ls" })}</accent>`,
+		`<dim>└ out</dim>`,
+	]);
+});
+
+test("traceToLines skips empty toolOutput segments (start with no output)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	const lines = traceToLines(t, { width: 60, style, formatToolCall: fmtCall });
+	assert.deepEqual(lines, []);
+});
+
+test("traceToLines renders thinking and text prefixes with wrapping", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: "1234567890" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "abcdefghij" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_end", content: "abcdefghij" }), t);
+	const lines = traceToLines(t, { width: 6, style, formatToolCall: fmtCall });
+	// thinking prefix "⠿ " consumes 2 columns: "1234", "5678", "90"; text wraps at 6
+	assert.deepEqual(lines, ["<dim>⠿ 1234</dim>", "<dim>5678</dim>", "<dim>90</dim>", "<toolOutput>abcdef</toolOutput>", "<toolOutput>ghij</toolOutput>"]);
+});
+
+test("traceToLines shows the live pending stream as a tail line", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "stream" }), t);
+	const lines = traceToLines(t, { width: 60, style, formatToolCall: fmtCall });
+	assert.deepEqual(lines, ["<toolOutput>stream</toolOutput>"]);
+});
+
+test("traceToLines marks dropped segments", () => {
+	const t = emptyLiveTrace();
+	t.dropped = 3;
+	const lines = traceToLines(t, { width: 60, style, formatToolCall: fmtCall });
+	assert.deepEqual(lines, ["<muted>⋯ 3 earlier segments dropped</muted>"]);
+});
+
+test("buildTraceView windows to height; linesBack 0 = tail", () => {
+	let t = emptyLiveTrace();
+	for (let i = 1; i <= 8; i++) {
+		t = reduceLiveEvent(msgu({ type: "text_delta", delta: `line ${i}\n` }), t);
+	}
+	const view = buildTraceView(t, { width: 60, height: 3, linesBack: 0, style, formatToolCall: fmtCall });
+	assert.equal(view.length, 3);
+	assert.ok(view[2].includes("line 8"));
+	assert.ok(view[0].includes("line 6"));
+});
+
+test("buildTraceView linesBack scrolls back from the tail and clamps", () => {
+	let t = emptyLiveTrace();
+	for (let i = 1; i <= 3; i++) {
+		t = reduceLiveEvent(msgu({ type: "text_delta", delta: `line ${i}\n` }), t);
+	}
+	const view = buildTraceView(t, { width: 60, height: 2, linesBack: 999, style, formatToolCall: fmtCall });
+	assert.equal(view.length, 2);
+	assert.ok(view[0].includes("line 1"));
+	assert.ok(view[1].includes("line 2"));
+});
+
+test("buildTraceView pads short traces to height", () => {
+	const view = buildTraceView(emptyLiveTrace(), { width: 60, height: 3, linesBack: 0, style, formatToolCall: fmtCall });
+	assert.deepEqual(view, ["", "", ""]);
 });

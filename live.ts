@@ -309,3 +309,89 @@ export function reduceLiveEvent(event: JsonEvent, trace: LiveTrace): LiveTrace {
 			return trace;
 	}
 }
+
+/**
+ * Wrap raw text to a width, preserving existing newlines (no ANSI handling —
+ * style after). A trailing newline terminates the last line instead of
+ * producing a phantom empty one (split artifact).
+ */
+export function wrapToWidth(text: string, width: number): string[] {
+	if (width <= 0) return [];
+	const out: string[] = [];
+	for (const line of text.split("\n")) {
+		if (line.length <= width) {
+			out.push(line);
+			continue;
+		}
+		for (let i = 0; i < line.length; i += width) out.push(line.slice(i, i + width));
+	}
+	while (out.length > 0 && out[out.length - 1] === "") out.pop();
+	return out;
+}
+
+/**
+ * Full styled line list for a trace. `style` is applied per line so ANSI
+ * stays well-formed; `formatToolCall` renders tool calls; empty toolOutput
+ * segments (execution started, no output yet) render nothing.
+ */
+export function traceToLines(
+	trace: LiveTrace,
+	opts: { width: number; style: StyleFn; formatToolCall: FormatToolCallFn },
+): string[] {
+	const { width, style, formatToolCall } = opts;
+	const lines: string[] = [];
+	if (trace.dropped > 0) {
+		lines.push(style("muted", `⋯ ${trace.dropped} earlier segment${trace.dropped === 1 ? "" : "s"} dropped`));
+	}
+	const renderText = (color: string, prefix: string, text: string) => {
+		let first = true;
+		for (const raw of wrapToWidth(text, Math.max(1, width - prefix.length))) {
+			lines.push(style(color, (first ? prefix : "") + raw));
+			first = false;
+		}
+	};
+	const renderSegment = (seg: TraceSegment) => {
+		if (seg.kind === "thinking") renderText("dim", "⠿ ", seg.text);
+		else if (seg.kind === "text") renderText("toolOutput", "", seg.text);
+		else if (seg.kind === "toolCall") lines.push(formatToolCall(seg.name, seg.args, style));
+		else if (seg.text) renderText(seg.isError ? "error" : "dim", "└ ", seg.text);
+	};
+	for (const seg of trace.segments) renderSegment(seg);
+	if (trace.pending && trace.pending.text.trim()) {
+		renderText(
+			trace.pending.kind === "thinking" ? "dim" : "toolOutput",
+			trace.pending.kind === "thinking" ? "⠿ " : "",
+			trace.pending.text,
+		);
+	}
+	return lines;
+}
+
+/**
+ * Visible window of the trace: exactly `height` lines. `linesBack` = lines
+ * scrolled up from the live tail (0 = follow the tail), clamped to content.
+ */
+export function buildTraceView(
+	trace: LiveTrace,
+	opts: {
+		width: number;
+		height: number;
+		linesBack: number;
+		style: StyleFn;
+		formatToolCall: FormatToolCallFn;
+	},
+): string[] {
+	const { height, linesBack } = opts;
+	const lines = traceToLines(trace, opts);
+	const visible: string[] = [];
+	if (lines.length > height) {
+		const maxBack = lines.length - height;
+		const back = Math.max(0, Math.min(linesBack, maxBack));
+		const start = lines.length - height - back;
+		for (let i = 0; i < height; i++) visible.push(lines[start + i]);
+	} else {
+		for (let i = 0; i < lines.length; i++) visible.push(lines[i]);
+		while (visible.length < height) visible.push("");
+	}
+	return visible;
+}
