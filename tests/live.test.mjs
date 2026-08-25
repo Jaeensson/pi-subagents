@@ -155,3 +155,43 @@ test("dropping a whitespace-only pending stream subtracts its bytes (D6)", () =>
 	assert.equal(t.pending, null);
 	assert.equal(t.bytes, 0);
 });
+
+const toolPart = (name, args, index = 0) => ({ type: "toolCall", name, arguments: args });
+
+test("toolCall parts in message content become toolCall segments (args JSON string parsed)", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_start" }, { role: "assistant", content: [toolPart("grep", '{"pattern":"modelTiers"}')] }), t);
+	assert.deepEqual(t.segments, [{ kind: "toolCall", name: "grep", args: { pattern: "modelTiers" } }]);
+});
+
+test("the same content index is not emitted twice per message", () => {
+	let t = emptyLiveTrace();
+	const msg = { role: "assistant", content: [toolPart("grep", '{"pattern":"x"}')] };
+	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, msg), t);
+	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, msg), t);
+	t = reduceLiveEvent({ type: "message_end", message: msg }, t);
+	assert.equal(t.segments.length, 1);
+});
+
+test("message_end resets the content index for the next message", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, { role: "assistant", content: [toolPart("read", '{"path":"a.ts"}')] }), t);
+	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [toolPart("read", '{"path":"a.ts"}')] } }, t);
+	// next assistant message starts its content array at index 0 again
+	t = reduceLiveEvent(msgu({ type: "toolcall_start" }, { role: "assistant", content: [toolPart("bash", '{"command":"npm test"}')] }), t);
+	assert.deepEqual(t.segments.map((s) => s.name), ["read", "bash"]);
+});
+
+test("toolCall with non-string arguments is passed through", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "toolcall_end" }, { role: "assistant", content: [toolPart("edit", { path: "a.ts", edits: [] })] }), t);
+	assert.deepEqual(t.segments[0].args, { path: "a.ts", edits: [] });
+});
+
+test("message_end seals any still-open stream", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(msgu({ type: "text_start" }), t);
+	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "trailing" }), t);
+	t = reduceLiveEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "trailing" }] } }, t);
+	assert.deepEqual(t.segments, [{ kind: "text", text: "trailing" }]);
+});

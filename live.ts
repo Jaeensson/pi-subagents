@@ -119,6 +119,48 @@ function applyMessageUpdate(event: JsonEvent, trace: LiveTrace): LiveTrace {
 			applyStreamDelta(trace, "text", dt, deltaText, content);
 		}
 	}
+	scanToolCalls(event.message, trace);
+	return trace;
+}
+
+function parseArgs(raw: unknown): Record<string, unknown> {
+	if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+		return raw as Record<string, unknown>;
+	}
+	if (typeof raw === "string") {
+		try {
+			const parsed = JSON.parse(raw);
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				return parsed as Record<string, unknown>;
+			}
+		} catch {
+			/* fall through to raw wrapper */
+		}
+	}
+	return { raw: String(raw ?? "") };
+}
+
+/** Emit a toolCall segment for each content part not yet emitted (dedupe by content index). */
+function scanToolCalls(message: { content?: Array<Record<string, unknown>> } | undefined, trace: LiveTrace): void {
+	if (!message?.content) return;
+	const content = message.content;
+	for (let i = 0; i < content.length; i++) {
+		if (i <= trace.lastToolIndex) continue;
+		const part = content[i];
+		if (!part || part.type !== "toolCall") continue;
+		trace.lastToolIndex = i;
+		const name = typeof part.name === "string" && part.name ? part.name : "?";
+		const args = parseArgs(part.arguments);
+		trace.segments.push({ kind: "toolCall", name, args });
+		trace.bytes += segmentBytes({ kind: "toolCall", name, args });
+	}
+}
+
+/** Reconcile at message end: seal open streams, emit remaining toolCalls, reset the content index. */
+function applyMessageEnd(event: JsonEvent, trace: LiveTrace): LiveTrace {
+	sealPending(trace);
+	scanToolCalls(event.message, trace);
+	trace.lastToolIndex = -1;
 	return trace;
 }
 
@@ -144,6 +186,8 @@ export function reduceLiveEvent(event: JsonEvent, trace: LiveTrace): LiveTrace {
 	switch (event.type) {
 		case "message_update":
 			return applyMessageUpdate(event, trace);
+		case "message_end":
+			return applyMessageEnd(event, trace);
 		default:
 			return trace;
 	}
