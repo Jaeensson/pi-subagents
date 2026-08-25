@@ -263,7 +263,7 @@ test("toolcall_delta without toolcall_start still seals an open text stream", ()
 	assert.deepEqual(t.segments.map((s) => s.kind), ["text", "toolCall"]);
 });
 
-const execEv = (type, extra = {}) => ({ type, toolCallId: "t1", toolName: "bash", args: { command: "npm test" }, ...extra });
+const execEv = (type, extra = {}, toolCallId = "t1") => ({ type, toolCallId, toolName: "bash", args: { command: "npm test" }, ...extra });
 const textSnap = (text) => ({ content: [{ type: "text", text }] });
 
 test("tool execution updates REPLACE the open toolOutput segment with the cumulative snapshot", () => {
@@ -315,4 +315,44 @@ test("empty snapshot content renders as empty text (no JSON fallback noise)", ()
 	t = reduceLiveEvent(execEv("tool_execution_start"), t);
 	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [] } }), t);
 	assert.equal(t.segments[t.segments.length - 1].text, "");
+});
+
+test("parallel executions route updates and errors by toolCallId", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start", {}, "call_a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_start", {}, "call_b"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("AA") }, "call_a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("BB") }, "call_b"), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("AA"), isError: true }, "call_a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("BB"), isError: false }, "call_b"), t);
+	assert.deepEqual(
+		t.segments.map((s) => s.kind === "toolOutput" ? [s.toolCallId, s.text, s.isError] : null),
+		[["call_a", "AA", true], ["call_b", "BB", false]],
+	);
+});
+
+test("sequential executions keep separate segments", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start", {}, "a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("one") }, "a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("one") }, "a"), t);
+	t = reduceLiveEvent(execEv("tool_execution_start", {}, "b"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("two") }, "b"), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("two") }, "b"), t);
+	assert.deepEqual(t.segments.map((s) => s.text), ["one", "two"]);
+});
+
+test("tool execution update/end without a preceding start is a no-op", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("x") }), t);
+	t = reduceLiveEvent(execEv("tool_execution_end", { result: textSnap("y"), isError: true }), t);
+	assert.deepEqual(t.segments, []);
+});
+
+test("tool execution update without partialResult does not blank the segment", () => {
+	let t = emptyLiveTrace();
+	t = reduceLiveEvent(execEv("tool_execution_start"), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: textSnap("keep") }), t);
+	t = reduceLiveEvent(execEv("tool_execution_update", {}), t);
+	assert.equal(t.segments[t.segments.length - 1].text, "keep");
 });

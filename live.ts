@@ -12,7 +12,7 @@ export type TraceSegment =
 	| { kind: "thinking"; text: string }
 	| { kind: "text"; text: string }
 	| { kind: "toolCall"; name: string; args: Record<string, unknown> }
-	| { kind: "toolOutput"; text: string; isError?: boolean };
+	| { kind: "toolOutput"; text: string; isError?: boolean; toolCallId?: string };
 
 export interface LiveTrace {
 	/** Chronological sealed segments. */
@@ -192,8 +192,14 @@ function applyMessageEnd(event: JsonEvent, trace: LiveTrace): LiveTrace {
 	return trace;
 }
 
-/** Last segment if it exists (search backwards for the newest toolOutput). */
-function lastToolOutputSegment(trace: LiveTrace): TraceSegment | null {
+/** Newest toolOutput; exact toolCallId match preferred, newest unmatched as fallback. */
+function lastToolOutputSegment(trace: LiveTrace, toolCallId?: string): TraceSegment | null {
+	if (toolCallId !== undefined) {
+		for (let i = trace.segments.length - 1; i >= 0; i--) {
+			const s = trace.segments[i];
+			if (s.kind === "toolOutput" && s.toolCallId === toolCallId) return s;
+		}
+	}
 	for (let i = trace.segments.length - 1; i >= 0; i--) {
 		if (trace.segments[i].kind === "toolOutput") return trace.segments[i];
 	}
@@ -206,6 +212,7 @@ function lastToolOutputSegment(trace: LiveTrace): TraceSegment | null {
  * anything else JSON-stringifies (empty content arrays → "").
  */
 function toolResultText(raw: unknown): string {
+	if (raw == null) return "";
 	if (typeof raw === "string") return raw;
 	if (raw && typeof raw === "object" && !Array.isArray(raw)) {
 		const content = (raw as Record<string, unknown>).content;
@@ -227,9 +234,9 @@ function toolResultText(raw: unknown): string {
 	}
 }
 
-/** Replace the open toolOutput segment's text (snapshots, not deltas), keeping bytes accurate. */
-function setOpenToolOutput(trace: LiveTrace, text: string): void {
-	const seg = lastToolOutputSegment(trace);
+/** Replace the targeted toolOutput segment's text (snapshots, not deltas), keeping bytes accurate. */
+function setOpenToolOutput(trace: LiveTrace, text: string, toolCallId?: string): void {
+	const seg = lastToolOutputSegment(trace, toolCallId);
 	if (!seg) return;
 	const old = seg.text;
 	if (old === text) return;
@@ -239,17 +246,19 @@ function setOpenToolOutput(trace: LiveTrace, text: string): void {
 }
 
 function applyToolExecution(evType: string, event: Record<string, unknown>, trace: LiveTrace): LiveTrace {
+	const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
 	if (evType === "tool_execution_start") {
-		trace.segments.push({ kind: "toolOutput", text: "" });
+		trace.segments.push({ kind: "toolOutput", text: "", toolCallId: id });
 		return trace;
 	}
 	if (evType === "tool_execution_update") {
-		setOpenToolOutput(trace, toolResultText(event.partialResult));
+		if (event.partialResult == null) return trace;
+		setOpenToolOutput(trace, toolResultText(event.partialResult), id);
 		return trace;
 	}
 	// tool_execution_end
-	setOpenToolOutput(trace, toolResultText(event.result));
-	const seg = lastToolOutputSegment(trace);
+	if (event.result != null) setOpenToolOutput(trace, toolResultText(event.result), id);
+	const seg = lastToolOutputSegment(trace, id);
 	if (seg) seg.isError = event.isError === true;
 	return trace;
 }
