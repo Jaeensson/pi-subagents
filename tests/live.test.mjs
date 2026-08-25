@@ -28,6 +28,7 @@ test("applyLiveEvent ignores empty, malformed, and unrelated lines", () => {
 	assert.equal(applyLiveEvent("not json{{{", t), t);
 	assert.equal(applyLiveEvent(JSON.stringify({ type: "message_start", message: { role: "assistant", content: [] } }), t), t);
 	assert.equal(applyLiveEvent(JSON.stringify({ type: "tool_result_end", message: { role: "toolResult", content: [] } }), t), t);
+	assert.equal(applyLiveEvent("null", t), t); // literal JSON null — unrelated line, no throw
 	assert.equal(t.segments.length, 0);
 });
 

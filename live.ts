@@ -135,6 +135,8 @@ export function applyLiveEvent(line: string, trace: LiveTrace): LiveTrace {
 
 /** Pure reducer over a parsed event object (exported for direct unit tests). */
 export function reduceLiveEvent(event: JsonEvent, trace: LiveTrace): LiveTrace {
+	// Literal JSON null (and any non-object payload) is an unrelated line.
+	if (!event || typeof event !== "object") return trace;
 	switch (event.type) {
 		case "message_update":
 			return applyMessageUpdate(event, trace);
