@@ -102,9 +102,10 @@ export class TraceRenderer {
 			seg.kind === "thinking"
 				? { color: (text) => this.style("thinkingText", text), italic: true }
 				: undefined;
+		// pi's conversation renders exactly: new Markdown(text.trim(), pad, 0, getMarkdownTheme(), defaultStyle).
+		const text = seg.text.trim();
 		try {
-			// pi's conversation renders exactly: new Markdown(text, pad, 0, getMarkdownTheme(), defaultStyle).
-			return new Markdown(seg.text, 0, 0, md, defaultTextStyle).render(width);
+			return new Markdown(text, 0, 0, md, defaultTextStyle).render(width);
 		} catch {
 			// Defensive: never blank the pane; degrade to the plain per-line path.
 			return this.plainLines(
