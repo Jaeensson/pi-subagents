@@ -81,11 +81,12 @@ TUI-only — print/JSON modes are unaffected.
 
 While subagents run, press `shift+ctrl+w` to open a centered, bordered live
 watch pane showing a subagent's reasoning stream in real time — thinking,
-visible text, tool calls, and in-progress tool output, colored like the main
-conversation (thinkingText / text / toolOutput):
+visible text, tool calls, and in-progress tool output, rendered with the same
+native markdown as the main conversation: headings, lists, tables, and
+syntax-highlighted code blocks (thinking stays italic thinkingText):
 
     ┌● watching: researcher · 1/2  3m 12s · claude-opus-4-5─────────┐
-    │⠿ let me check where settings are read…                      │
+    │Let me check where settings are read… (thinking, italic)     │
     │→ grep pattern="modelTiers" in src/                          │
     │└ pages… done, 1 hit                                         │
     │● live   ↑↓ scroll · PgUp/PgDn · Tab agent · End tail · Esc close│

@@ -28,11 +28,17 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   - `jobs.ts` — job orchestration: chain runner, concurrency limiter,
     result builders, model-tier context
   - `tui.ts` — TUI rendering helpers + persistent status widget
-  - `watch.ts` — keybind-toggled watch pane: overlay component, keys, ticker
-    (depends on runtime + live + core + tui; never on process/jobs)
+  - `watch-render.ts` — markdown-aware trace→lines rendering for the watch
+    pane: sealed + pending text/thinking through pi's native Markdown +
+    getMarkdownTheme, memoized via live.ts's LineCache. Leaf module;
+    depends only on live + pi-tui + pi-coding-agent (never process/jobs)
+  - `watch.ts` — keybind-toggled watch pane: overlay component, keys, ticker,
+    renderer latching (depends on runtime + watch-render + live + core + tui;
+    never on process/jobs)
   - `tools/*.ts` — one file per registered tool (`defineTool`)
 - Keep the dependency graph acyclic: live → runtime → process → jobs → tools;
-  tui depends on runtime + core; watch depends on runtime + live + core + tui.
+  tui depends on runtime + core; watch-render depends on live; watch depends
+  on runtime + watch-render + live + core + tui.
 - `agents.ts` discovers agent definitions from `~/.pi/agent/agents/*.md` and seeds the bundled defaults (`agents/*.md`: scout, researcher, worker, reviewer) into that directory on load when missing.
 - Agent files: YAML frontmatter (`name`, `description` required; `tools`,
   `tier`, `extensions` optional) + markdown system prompt body. `tier` is

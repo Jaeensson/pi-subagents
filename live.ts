@@ -473,9 +473,11 @@ export function resolveOptional<T>(factory: () => T): T | undefined {
 /**
  * Rendered-line cache scoped to one render width. Entries are keyed by
  * content key (segment index; -1 for the pending stream) and guarded by the
- * exact source text + kind: the trace ring buffer can evict the head and
- * reuse an index with different text, and only a text or kind change needs
- * a rebuild (thinking renders styled differently from text).
+ * exact kind + source text: the trace ring buffer can evict the head and
+ * reuse an index with different text or kind, and only such a change needs a
+ * rebuild. Entry growth is bounded by the caller's trace cap (the render loop
+ * only ever addresses indices 0..N-1 of a capped trace). Returned line arrays
+ * are shared; callers must not mutate them.
  */
 export class LineCache {
 	width: number;
