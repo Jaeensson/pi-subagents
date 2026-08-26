@@ -79,19 +79,24 @@ TUI-only — print/JSON modes are unaffected.
 
 ### Watch pane
 
-While subagents run, press `shift+ctrl+w` to open a live watch pane showing a
-subagent's reasoning stream in real time — thinking (dim), visible text, tool
-calls, and in-progress tool output:
+While subagents run, press `shift+ctrl+w` to open a centered, bordered live
+watch pane showing a subagent's reasoning stream in real time — thinking,
+visible text, tool calls, and in-progress tool output, colored like the main
+conversation (thinkingText / text / toolOutput):
 
-    ● watching: researcher · 1/2  3m 12s · claude-opus-4-5
-      ⠿ let me check where settings are read…
-      → grep pattern="modelTiers" in src/
-      └ pages… done, 1 hit
-    ● live   ↑↓ scroll · PgUp/PgDn · Tab agent · End tail · Esc close
+    ┌● watching: researcher · 1/2  3m 12s · claude-opus-4-5─────────┐
+    │⠿ let me check where settings are read…                      │
+    │→ grep pattern="modelTiers" in src/                          │
+    │└ pages… done, 1 hit                                         │
+    │● live   ↑↓ scroll · PgUp/PgDn · Tab agent · End tail · Esc close│
+    └─────────────────────────────────────────────────────────────┘
 
 - `shift+ctrl+w` toggles the pane (TUI only). `↑↓` scroll the retained
   history, `PgUp`/`PgDn` page, `Tab` cycles running agents, `End` jumps back
   to the live tail, `Esc` (or the toggle key) closes.
+- Scrolling up **pins** the viewport: new tokens keep streaming below while
+  the text you're reading stays put; the footer shows `↑ N above` while
+  pinned. Scrolling down to the live edge (or `End`) resumes tailing.
 - The pane does not capture focus — keep typing in the editor while open.
 - A finished selected agent keeps its final view (`✓ done`); the pane closes
   automatically when the last agent finishes.

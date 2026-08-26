@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, buildTraceView, emptyLiveTrace, reduceLiveEvent, traceToLines, wrapToWidth } from "../live.ts";
+import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, buildTraceView, emptyLiveTrace, linesAboveTail, moveViewTop, reduceLiveEvent, resolveViewTop, traceLineCount, traceToLines, wrapToWidth } from "../live.ts";
 
 const msgu = (ame, message) => ({
 	type: "message_update",
@@ -443,10 +443,10 @@ test("traceToLines renders thinking, text, toolCall, toolOutput with styles", ()
 	t = reduceLiveEvent(execEv("tool_execution_update", { partialResult: { content: [{ type: "text", text: "out" }] } }), t);
 	const lines = traceToLines(t, { width: 60, style, formatToolCall: fmtCall });
 	assert.deepEqual(lines, [
-		`<dim>⠿ plan</dim>`,
-		`<toolOutput>hi</toolOutput>`,
+		`<thinking>⠿ plan</thinking>`,
+		`<text>hi</text>`,
 		`<accent>→ bash ${JSON.stringify({ command: "ls" })}</accent>`,
-		`<dim>└ out</dim>`,
+		`<toolOutput>└ out</toolOutput>`,
 	]);
 });
 
@@ -465,14 +465,14 @@ test("traceToLines renders thinking and text prefixes with wrapping", () => {
 	t = reduceLiveEvent(msgu({ type: "text_end", content: "abcdefghij" }), t);
 	const lines = traceToLines(t, { width: 6, style, formatToolCall: fmtCall });
 	// thinking prefix "⠿ " consumes 2 columns: "1234", "5678", "90"; text wraps at 6
-	assert.deepEqual(lines, ["<dim>⠿ 1234</dim>", "<dim>5678</dim>", "<dim>90</dim>", "<toolOutput>abcdef</toolOutput>", "<toolOutput>ghij</toolOutput>"]);
+	assert.deepEqual(lines, ["<thinking>⠿ 1234</thinking>", "<thinking>5678</thinking>", "<thinking>90</thinking>", "<text>abcdef</text>", "<text>ghij</text>"]);
 });
 
 test("traceToLines shows the live pending stream as a tail line", () => {
 	let t = emptyLiveTrace();
 	t = reduceLiveEvent(msgu({ type: "text_delta", delta: "stream" }), t);
 	const lines = traceToLines(t, { width: 60, style, formatToolCall: fmtCall });
-	assert.deepEqual(lines, ["<toolOutput>stream</toolOutput>"]);
+	assert.deepEqual(lines, ["<text>stream</text>"]);
 });
 
 test("traceToLines marks dropped segments", () => {
@@ -482,29 +482,82 @@ test("traceToLines marks dropped segments", () => {
 	assert.deepEqual(lines, ["<muted>⋯ 3 earlier segments dropped</muted>"]);
 });
 
-test("buildTraceView windows to height; linesBack 0 = tail", () => {
+test("buildTraceView windows to height; viewTop -1 = follow the tail", () => {
 	let t = emptyLiveTrace();
 	for (let i = 1; i <= 8; i++) {
 		t = reduceLiveEvent(msgu({ type: "text_delta", delta: `line ${i}\n` }), t);
 	}
-	const view = buildTraceView(t, { width: 60, height: 3, linesBack: 0, style, formatToolCall: fmtCall });
-	assert.equal(view.length, 3);
-	assert.ok(view[2].includes("line 8"));
-	assert.ok(view[0].includes("line 6"));
+	const view = buildTraceView(t, { width: 60, height: 3, viewTop: -1, style, formatToolCall: fmtCall });
+	assert.equal(view.lines.length, 3);
+	assert.ok(view.lines[2].includes("line 8"));
+	assert.ok(view.lines[0].includes("line 6"));
+	assert.equal(view.top, 5);
+	assert.equal(view.maxTop, 5);
+	assert.equal(view.atTail, true);
 });
 
-test("buildTraceView linesBack scrolls back from the tail and clamps", () => {
+test("buildTraceView pins an absolute viewTop while content grows", () => {
+	let t = emptyLiveTrace();
+	for (let i = 1; i <= 6; i++) {
+		t = reduceLiveEvent(msgu({ type: "text_delta", delta: `line ${i}\n` }), t);
+	}
+	const view1 = buildTraceView(t, { width: 60, height: 3, viewTop: 2, style, formatToolCall: fmtCall });
+	assert.ok(view1.lines[0].includes("line 3"));
+	assert.equal(view1.atTail, false);
+	// More content arrives: the pinned viewport must NOT move.
+	for (let i = 7; i <= 10; i++) {
+		t = reduceLiveEvent(msgu({ type: "text_delta", delta: `line ${i}\n` }), t);
+	}
+	const view2 = buildTraceView(t, { width: 60, height: 3, viewTop: 2, style, formatToolCall: fmtCall });
+	assert.deepEqual(view2.lines, view1.lines);
+	assert.equal(view2.atTail, false);
+});
+
+test("buildTraceView clamps viewTop to content and pads short traces", () => {
 	let t = emptyLiveTrace();
 	for (let i = 1; i <= 3; i++) {
 		t = reduceLiveEvent(msgu({ type: "text_delta", delta: `line ${i}\n` }), t);
 	}
-	const view = buildTraceView(t, { width: 60, height: 2, linesBack: 999, style, formatToolCall: fmtCall });
-	assert.equal(view.length, 2);
-	assert.ok(view[0].includes("line 1"));
-	assert.ok(view[1].includes("line 2"));
+	const view = buildTraceView(t, { width: 60, height: 2, viewTop: 999, style, formatToolCall: fmtCall });
+	assert.equal(view.lines.length, 2);
+	assert.ok(view.lines[0].includes("line 2")); // clamped to maxTop (1)
+	assert.ok(view.lines[1].includes("line 3"));
+	const short = buildTraceView(emptyLiveTrace(), { width: 60, height: 3, viewTop: 0, style, formatToolCall: fmtCall });
+	assert.deepEqual(short.lines, ["", "", ""]);
+	assert.equal(short.top, 0);
+	assert.equal(short.atTail, true);
 });
 
-test("buildTraceView pads short traces to height", () => {
-	const view = buildTraceView(emptyLiveTrace(), { width: 60, height: 3, linesBack: 0, style, formatToolCall: fmtCall });
-	assert.deepEqual(view, ["", "", ""]);
+test("resolveViewTop: negative = tail, absolute values clamped to content", () => {
+	assert.equal(resolveViewTop(10, 3, -1), 7);
+	assert.equal(resolveViewTop(10, 3, -5), 7);
+	assert.equal(resolveViewTop(10, 3, 2), 2);
+	assert.equal(resolveViewTop(10, 3, 999), 7);
+	assert.equal(resolveViewTop(2, 3, -1), 0); // content shorter than viewport
+});
+
+test("moveViewTop scrolls absolutely and returns to the tail at the bottom edge", () => {
+	// 10 lines, height 3 → maxTop 7
+	assert.equal(moveViewTop(10, 3, -1, -1), 6); // up from tail pins one line of history
+	assert.equal(moveViewTop(10, 3, 6, -1), 5);
+	assert.equal(moveViewTop(10, 3, 5, 1), 6);
+	assert.equal(moveViewTop(10, 3, 6, 1), -1); // back at the tail → follow again
+	assert.equal(moveViewTop(10, 3, 0, -1), 0); // already at the top
+	assert.equal(moveViewTop(10, 3, 6, 10), -1); // page-past the edge → follow
+	assert.equal(moveViewTop(3, 3, -1, -1), -1); // nothing to scroll
+});
+
+test("linesAboveTail counts lines between the viewport top and the live tail", () => {
+	assert.equal(linesAboveTail(10, 3, 7), 0);
+	assert.equal(linesAboveTail(10, 3, 3), 4);
+	assert.equal(linesAboveTail(10, 10, 0), 0);
+});
+
+test("traceLineCount counts rendered lines, style-independent", () => {
+	let t = emptyLiveTrace();
+	for (let i = 1; i <= 4; i++) {
+		t = reduceLiveEvent(msgu({ type: "text_delta", delta: `line ${i}\n` }), t);
+	}
+	assert.equal(traceLineCount(t, 60, fmtCall), 4);
+	assert.equal(traceLineCount(t, 60, fmtCall), traceToLines(t, { width: 60, style, formatToolCall: fmtCall }).length);
 });

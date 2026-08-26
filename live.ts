@@ -341,6 +341,11 @@ export function wrapToWidth(text: string, width: number): string[] {
  * Full styled line list for a trace. `style` is applied per line so ANSI
  * stays well-formed; `formatToolCall` renders tool calls; empty toolOutput
  * segments (execution started, no output yet) render nothing.
+ *
+ * Color tokens are content kinds (abstract): "thinking", "text",
+ * "toolOutput", "error", "muted" — the caller's style fn maps them onto
+ * concrete theme colors (e.g. the watch pane maps thinking → the main
+ * conversation's thinkingText). formatToolCall brings its own tokens.
  */
 export function traceToLines(
 	trace: LiveTrace,
@@ -359,15 +364,15 @@ export function traceToLines(
 		}
 	};
 	const renderSegment = (seg: TraceSegment) => {
-		if (seg.kind === "thinking") renderText("dim", "⠿ ", seg.text);
-		else if (seg.kind === "text") renderText("toolOutput", "", seg.text);
+		if (seg.kind === "thinking") renderText("thinking", "⠿ ", seg.text);
+		else if (seg.kind === "text") renderText("text", "", seg.text);
 		else if (seg.kind === "toolCall") lines.push(formatToolCall(seg.name, seg.args, style));
-		else if (seg.text) renderText(seg.isError ? "error" : "dim", "└ ", seg.text);
+		else if (seg.text) renderText(seg.isError ? "error" : "toolOutput", "└ ", seg.text);
 	};
 	for (const seg of trace.segments) renderSegment(seg);
 	if (trace.pending && trace.pending.text.trim()) {
 		renderText(
-			trace.pending.kind === "thinking" ? "dim" : "toolOutput",
+			trace.pending.kind === "thinking" ? "thinking" : "text",
 			trace.pending.kind === "thinking" ? "⠿ " : "",
 			trace.pending.text,
 		);
@@ -376,30 +381,67 @@ export function traceToLines(
 }
 
 /**
- * Visible window of the trace: exactly `height` lines. `linesBack` = lines
- * scrolled up from the live tail (0 = follow the tail), clamped to content.
+ * Number of rendered trace lines at a given width. Style-independent — the
+ * style fn only wraps strings and never changes line counts — so callers can
+ * measure with an identity style for cheap scroll math.
+ */
+export function traceLineCount(trace: LiveTrace, width: number, formatToolCall: FormatToolCallFn): number {
+	return traceToLines(trace, { width, style: (_color, text) => text, formatToolCall }).length;
+}
+
+/** Largest valid viewport top index (viewport at the live tail). */
+export function maxTraceTop(lineCount: number, height: number): number {
+	return Math.max(0, lineCount - height);
+}
+
+/**
+ * Clamp a requested viewport top (absolute line index) to the content.
+ * Negative values (including the -1 sentinel) mean "follow the live tail".
+ */
+export function resolveViewTop(lineCount: number, height: number, viewTop: number): number {
+	const maxTop = maxTraceTop(lineCount, height);
+	if (viewTop < 0) return maxTop;
+	return Math.min(viewTop, maxTop);
+}
+
+/**
+ * Move the viewport by `delta` lines (negative = older). Returns the new
+ * absolute top, or -1 to follow the live tail once the viewport reaches it.
+ */
+export function moveViewTop(lineCount: number, height: number, viewTop: number, delta: number): number {
+	if (delta === 0) return viewTop;
+	const maxTop = maxTraceTop(lineCount, height);
+	const cur = resolveViewTop(lineCount, height, viewTop);
+	const next = Math.max(0, Math.min(cur + delta, maxTop));
+	return next === maxTop ? -1 : next;
+}
+
+/** Lines between the viewport top and the live tail (0 = at the tail). */
+export function linesAboveTail(lineCount: number, height: number, top: number): number {
+	return Math.max(0, lineCount - height - top);
+}
+
+/**
+ * Visible window of the trace: exactly `height` lines.
+ * `viewTop` is the absolute index of the first visible line; negative values
+ * (including -1) follow the live tail. When pinned (viewTop >= 0) the window
+ * stays put as new content arrives below — scrolling up pauses the tailing.
  */
 export function buildTraceView(
 	trace: LiveTrace,
 	opts: {
 		width: number;
 		height: number;
-		linesBack: number;
+		viewTop: number;
 		style: StyleFn;
 		formatToolCall: FormatToolCallFn;
 	},
-): string[] {
-	const { height, linesBack } = opts;
+): { lines: string[]; top: number; maxTop: number; atTail: boolean } {
+	const { height, viewTop } = opts;
 	const lines = traceToLines(trace, opts);
+	const maxTop = maxTraceTop(lines.length, height);
+	const top = resolveViewTop(lines.length, height, viewTop);
 	const visible: string[] = [];
-	if (lines.length > height) {
-		const maxBack = lines.length - height;
-		const back = Math.max(0, Math.min(linesBack, maxBack));
-		const start = lines.length - height - back;
-		for (let i = 0; i < height; i++) visible.push(lines[start + i]);
-	} else {
-		for (let i = 0; i < lines.length; i++) visible.push(lines[i]);
-		while (visible.length < height) visible.push("");
-	}
-	return visible;
+	for (let i = 0; i < height; i++) visible.push(lines[top + i] ?? "");
+	return { lines: visible, top, maxTop, atTail: top === maxTop };
 }
