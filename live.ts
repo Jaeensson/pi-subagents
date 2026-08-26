@@ -445,3 +445,56 @@ export function buildTraceView(
 	for (let i = 0; i < height; i++) visible.push(lines[top + i] ?? "");
 	return { lines: visible, top, maxTop, atTail: top === maxTop };
 }
+
+/**
+ * Whether a segment takes the native-markdown render path (text and thinking
+ * are markdown; tool calls and tool output are plain).
+ */
+export function isMarkdownSegment(seg: TraceSegment): boolean {
+	return seg.kind === "text" || seg.kind === "thinking";
+}
+
+/**
+ * Safely resolve a renderer dependency that may throw (e.g. pi's markdown
+ * theme factory, which throws when its global theme singleton is not
+ * initialized). undefined → callers fall back to plain rendering so the
+ * watch pane never blanks.
+ */
+export function resolveOptional<T>(factory: () => T): T | undefined {
+	try {
+		return factory();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Rendered-line cache scoped to one render width. Entries are keyed by
+ * content key (segment index; -1 for the pending stream) and guarded by the
+ * exact source text: the trace ring buffer can evict the head and reuse an
+ * index with different text, and only a text change needs a rebuild.
+ */
+export class LineCache {
+	width: number;
+	private entries = new Map<number, { text: string; lines: string[] }>();
+
+	constructor(width: number) {
+		this.width = width;
+	}
+
+	/** Change the render width; any width change invalidates all entries. */
+	setWidth(width: number): void {
+		if (width === this.width) return;
+		this.width = width;
+		this.entries.clear();
+	}
+
+	/** Cached lines for `key` + `text`, or build-and-cache via `build`. */
+	get(key: number, text: string, build: (width: number) => string[]): string[] {
+		const hit = this.entries.get(key);
+		if (hit && hit.text === text) return hit.lines;
+		const lines = build(this.width);
+		this.entries.set(key, { text, lines });
+		return lines;
+	}
+}

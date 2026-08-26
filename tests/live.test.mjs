@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, buildTraceView, emptyLiveTrace, linesAboveTail, moveViewTop, reduceLiveEvent, resolveViewTop, traceLineCount, traceToLines, wrapToWidth } from "../live.ts";
+import { LIVE_TRACE_CAP_BYTES, applyLiveEvent, buildTraceView, emptyLiveTrace, isMarkdownSegment, LineCache, linesAboveTail, moveViewTop, reduceLiveEvent, resolveOptional, resolveViewTop, traceLineCount, traceToLines, wrapToWidth } from "../live.ts";
 
 const msgu = (ame, message) => ({
 	type: "message_update",
@@ -560,4 +560,58 @@ test("traceLineCount counts rendered lines, style-independent", () => {
 	}
 	assert.equal(traceLineCount(t, 60, fmtCall), 4);
 	assert.equal(traceLineCount(t, 60, fmtCall), traceToLines(t, { width: 60, style, formatToolCall: fmtCall }).length);
+});
+
+// ── Native-markdown rendering helpers (watch pane) ──────────────────────────
+
+test("isMarkdownSegment classifies text and thinking as markdown, the rest plain", () => {
+	assert.equal(isMarkdownSegment({ kind: "text", text: "x" }), true);
+	assert.equal(isMarkdownSegment({ kind: "thinking", text: "x" }), true);
+	assert.equal(isMarkdownSegment({ kind: "toolCall", name: "bash", args: {} }), false);
+	assert.equal(isMarkdownSegment({ kind: "toolOutput", text: "x", isError: false }), false);
+});
+
+test("LineCache reuses built lines on same width/key/text", () => {
+	const cache = new LineCache(40);
+	let builds = 0;
+	const build = (w) => { builds++; return [`line@${w}`]; };
+	assert.deepEqual(cache.get(0, "text", build), ["line@40"]);
+	assert.deepEqual(cache.get(0, "text", build), ["line@40"]); // cached
+	assert.equal(builds, 1);
+});
+
+test("LineCache rebuilds when the text under a key changes (eviction reuses indices)", () => {
+	const cache = new LineCache(40);
+	let builds = 0;
+	const build = (w) => { builds++; return [`@${w}`]; };
+	cache.get(0, "old", build);
+	cache.get(0, "new", build);
+	assert.equal(builds, 2);
+});
+
+test("LineCache keeps separate entries per key (segment index vs pending -1)", () => {
+	const cache = new LineCache(40);
+	const keyed = (key) => (w) => [`${key}@${w}`];
+	assert.deepEqual(cache.get(0, "same", keyed(0)), ["0@40"]);
+	assert.deepEqual(cache.get(1, "same", keyed(1)), ["1@40"]);
+	assert.deepEqual(cache.get(0, "same", keyed(0)), ["0@40"]); // key 0 still cached
+	assert.deepEqual(cache.get(-1, "same", keyed(-1)), ["-1@40"]); // pending key cached independently
+});
+
+test("LineCache invalidates all entries when the width changes", () => {
+	const cache = new LineCache(40);
+	let builds = 0;
+	const build = (w) => { builds++; return [`@${w}`]; };
+	cache.get(0, "x", build);
+	cache.setWidth(50);
+	cache.get(0, "x", build);
+	cache.setWidth(50); // same width → no invalidation
+	cache.get(0, "x", build);
+	assert.equal(builds, 2);
+	assert.equal(cache.width, 50);
+});
+
+test("resolveOptional returns the factory result and undefined on throw", () => {
+	assert.equal(resolveOptional(() => "theme"), "theme");
+	assert.equal(resolveOptional(() => { throw new Error("not initialized"); }), undefined);
 });
