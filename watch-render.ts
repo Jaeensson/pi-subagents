@@ -18,6 +18,7 @@ import { Markdown, type DefaultTextStyle, type MarkdownTheme } from "@earendil-w
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import {
 	LineCache,
+	isMarkdownSegment,
 	resolveOptional,
 	traceToLines,
 	wrapToWidth,
@@ -75,7 +76,7 @@ export class TraceRenderer {
 			out.push(this.style("muted", `⋯ ${trace.dropped} earlier segment${trace.dropped === 1 ? "" : "s"} dropped`));
 		}
 		trace.segments.forEach((seg, i) => {
-			if (seg.kind === "text" || seg.kind === "thinking") {
+			if (isMarkdownSegment(seg)) {
 				out.push(...this.cache.get(i, seg.text, () => this.renderMarkdown(seg, width)));
 				return;
 			}
@@ -87,7 +88,7 @@ export class TraceRenderer {
 				out.push(...this.plainLines(seg.isError ? "error" : "toolOutput", "└ ", seg.text, width));
 			}
 		});
-		const pending = trace.pending ? { kind: trace.pending.kind, text: trace.pending.text } : null;
+		const pending = trace.pending;
 		if (pending && pending.text.trim()) {
 			out.push(...this.cache.get(-1, pending.text, () => this.renderMarkdown(pending, width)));
 		}

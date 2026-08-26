@@ -450,7 +450,9 @@ export function buildTraceView(
  * Whether a segment takes the native-markdown render path (text and thinking
  * are markdown; tool calls and tool output are plain).
  */
-export function isMarkdownSegment(seg: TraceSegment): boolean {
+export function isMarkdownSegment(
+	seg: TraceSegment,
+): seg is Extract<TraceSegment, { kind: "text" } | { kind: "thinking" }> {
 	return seg.kind === "text" || seg.kind === "thinking";
 }
 
