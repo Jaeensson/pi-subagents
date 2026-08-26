@@ -27,15 +27,16 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import {
-	buildTraceView,
 	emptyLiveTrace,
+	maxTraceTop,
 	moveViewTop,
-	traceLineCount,
+	resolveViewTop,
 	type LiveTrace,
 } from "./live.ts";
 import { formatElapsed, formatModelTag, WATCH_PANE_KEYBIND } from "./core.ts";
 import { jobs, tasks, type Task } from "./runtime.ts";
 import { formatToolCall, getWidgetTheme, getWidgetTui } from "./tui.ts";
+import { TraceRenderer } from "./watch-render.ts";
 
 const TICK_MS = 150;
 const SCROLL_PAGE = 10;
@@ -57,6 +58,10 @@ let watchState: WatchState | undefined;
 let watchTimer: NodeJS.Timeout | undefined;
 /** Overlay width captured at the last render (for input-time scroll math). */
 let watchWidth = 0;
+/** Markdown-aware trace renderer, rebuilt when the widget theme instance changes. */
+let traceRenderer: TraceRenderer | undefined;
+let traceRendererTheme: any | undefined;
+let traceRendererWidth = 0;
 
 function runningTasks(): Task[] {
 	return [...tasks.values()].filter((t) => t.status === "running");
@@ -75,7 +80,29 @@ function contentWidth(tui: TUI): number {
 /** Count the rendered trace lines of a task at the current pane width. */
 function traceLength(task: Task | null, tui: TUI): number {
 	if (!task) return 0;
-	return traceLineCount(task.live, Math.max(1, contentWidth(tui)), formatToolCall);
+	const renderer = getTraceRenderer(Math.max(1, contentWidth(tui)));
+	if (!renderer) return 0;
+	return renderer.lines(task.live).length;
+}
+
+/**
+ * Lazy, theme-latched TraceRenderer: rebuilt only when the widget theme
+ * instance changes (theme hot-reload); width changes invalidate the line
+ * cache without rebuilding state.
+ */
+function getTraceRenderer(width: number): TraceRenderer | undefined {
+	const theme = getWidgetTheme();
+	if (!theme) return undefined;
+	if (!traceRenderer || traceRendererTheme !== theme) {
+		const style = (token: string, text: string) => theme.fg(conversationColor(token), text);
+		traceRenderer = new TraceRenderer({ width, style, formatToolCall });
+		traceRendererTheme = theme;
+		traceRendererWidth = width;
+	} else if (traceRendererWidth !== width) {
+		traceRenderer.setWidth(width);
+		traceRendererWidth = width;
+	}
+	return traceRenderer;
 }
 
 /** Toggle the watch pane; no-op when no subagent is running. */
@@ -109,6 +136,9 @@ export function closeWatch(): void {
 	watchHandle = undefined;
 	watchState = undefined;
 	watchWidth = 0;
+	traceRenderer = undefined;
+	traceRendererTheme = undefined;
+	traceRendererWidth = 0;
 	stopWatchTicker();
 }
 
@@ -254,21 +284,21 @@ function renderWatchPane(tui: TUI, width: number): string[] {
 	const bodyW = Math.max(1, width - 2);
 	const height = contentHeight(tui);
 	const trace: LiveTrace = task ? task.live : emptyLiveTrace();
-	const view = buildTraceView(trace, {
-		width: bodyW,
-		height,
-		viewTop: state.viewTop,
-		style: (token, text) => theme.fg(conversationColor(token), text),
-		formatToolCall,
-	});
+	const renderer = getTraceRenderer(bodyW);
+	if (!renderer) return []; // theme vanished — nothing to style
+	const lines = renderer.lines(trace);
+	const maxTop = maxTraceTop(lines.length, height);
+	const top = resolveViewTop(lines.length, height, state.viewTop);
+	const visible: string[] = [];
+	for (let i = 0; i < height; i++) visible.push(lines[top + i] ?? "");
 	const header = buildHeader(task, running, state, theme);
-	const footer = buildFooter(view.atTail, view.maxTop - view.top, theme);
+	const footer = buildFooter(top === maxTop, maxTop - top, theme);
 
 	const frame = theme.fg("border", "│");
 	const boxed = (line: string) => frame + padToWidth(line, bodyW) + frame;
 	const topBorder = theme.fg("border", `┌${"─".repeat(bodyW)}┐`);
 	const bottomBorder = theme.fg("border", `└${"─".repeat(bodyW)}┘`);
-	return [topBorder, boxed(header), ...view.lines.map(boxed), boxed(footer), bottomBorder];
+	return [topBorder, boxed(header), ...visible.map(boxed), boxed(footer), bottomBorder];
 }
 
 function buildHeader(task: Task | null, running: Task[], state: WatchState, theme: any): string {
