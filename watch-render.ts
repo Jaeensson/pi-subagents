@@ -77,7 +77,7 @@ export class TraceRenderer {
 		}
 		trace.segments.forEach((seg, i) => {
 			if (isMarkdownSegment(seg)) {
-				out.push(...this.cache.get(i, seg.text, () => this.renderMarkdown(seg, width)));
+				out.push(...this.cache.get(i, seg.kind, seg.text, () => this.renderMarkdown(seg, width)));
 				return;
 			}
 			if (seg.kind === "toolCall") {
@@ -90,7 +90,7 @@ export class TraceRenderer {
 		});
 		const pending = trace.pending;
 		if (pending && pending.text.trim()) {
-			out.push(...this.cache.get(-1, pending.text, () => this.renderMarkdown(pending, width)));
+			out.push(...this.cache.get(-1, pending.kind, pending.text, () => this.renderMarkdown(pending, width)));
 		}
 		return out;
 	}

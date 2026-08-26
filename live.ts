@@ -473,12 +473,13 @@ export function resolveOptional<T>(factory: () => T): T | undefined {
 /**
  * Rendered-line cache scoped to one render width. Entries are keyed by
  * content key (segment index; -1 for the pending stream) and guarded by the
- * exact source text: the trace ring buffer can evict the head and reuse an
- * index with different text, and only a text change needs a rebuild.
+ * exact source text + kind: the trace ring buffer can evict the head and
+ * reuse an index with different text, and only a text or kind change needs
+ * a rebuild (thinking renders styled differently from text).
  */
 export class LineCache {
 	width: number;
-	private entries = new Map<number, { text: string; lines: string[] }>();
+	private entries = new Map<number, { kind: string; text: string; lines: string[] }>();
 
 	constructor(width: number) {
 		this.width = width;
@@ -491,12 +492,12 @@ export class LineCache {
 		this.entries.clear();
 	}
 
-	/** Cached lines for `key` + `text`, or build-and-cache via `build`. */
-	get(key: number, text: string, build: (width: number) => string[]): string[] {
+	/** Cached lines for `key` + `kind` + `text`, or build-and-cache via `build`. */
+	get(key: number, kind: string, text: string, build: (width: number) => string[]): string[] {
 		const hit = this.entries.get(key);
-		if (hit && hit.text === text) return hit.lines;
+		if (hit && hit.kind === kind && hit.text === text) return hit.lines;
 		const lines = build(this.width);
-		this.entries.set(key, { text, lines });
+		this.entries.set(key, { kind, text, lines });
 		return lines;
 	}
 }

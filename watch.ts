@@ -58,7 +58,11 @@ let watchState: WatchState | undefined;
 let watchTimer: NodeJS.Timeout | undefined;
 /** Overlay width captured at the last render (for input-time scroll math). */
 let watchWidth = 0;
-/** Markdown-aware trace renderer, rebuilt when the widget theme instance changes. */
+/**
+ * Markdown-aware trace renderer. Hot-reload colors propagate lazily through
+ * pi's theme proxy on every render; this latch is a safety net that rebuilds
+ * the renderer when the widget hands us a new theme instance.
+ */
 let traceRenderer: TraceRenderer | undefined;
 let traceRendererTheme: any | undefined;
 let traceRendererWidth = 0;
@@ -87,8 +91,9 @@ function traceLength(task: Task | null, tui: TUI): number {
 
 /**
  * Lazy, theme-latched TraceRenderer: rebuilt only when the widget theme
- * instance changes (theme hot-reload); width changes invalidate the line
- * cache without rebuilding state.
+ * instance is replaced (theme hot-reload colors propagate lazily through
+ * the theme proxy); width changes invalidate the line cache without
+ * rebuilding state.
  */
 function getTraceRenderer(width: number): TraceRenderer | undefined {
 	const theme = getWidgetTheme();
@@ -216,6 +221,9 @@ function scrollWatch(state: WatchState, delta: number): void {
 	if (delta === 0) return;
 	const tui = getWidgetTui();
 	if (!tui) return;
+	// No renderer (theme gone): leave the viewport untouched rather than
+	// collapsing a pinned position to the live tail via a 0-line count.
+	if (!getTraceRenderer(Math.max(1, contentWidth(tui)))) return;
 	state.viewTop = moveViewTop(traceLength(tasks.get(state.taskId) ?? null, tui), contentHeight(tui), state.viewTop, delta);
 }
 
@@ -285,7 +293,7 @@ function renderWatchPane(tui: TUI, width: number): string[] {
 	const height = contentHeight(tui);
 	const trace: LiveTrace = task ? task.live : emptyLiveTrace();
 	const renderer = getTraceRenderer(bodyW);
-	if (!renderer) return []; // theme vanished — nothing to style
+	if (!renderer) return []; // defensive — theme guard above already covers this
 	const lines = renderer.lines(trace);
 	const maxTop = maxTraceTop(lines.length, height);
 	const top = resolveViewTop(lines.length, height, state.viewTop);

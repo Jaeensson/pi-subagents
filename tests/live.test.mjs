@@ -575,8 +575,8 @@ test("LineCache reuses built lines on same width/key/text", () => {
 	const cache = new LineCache(40);
 	let builds = 0;
 	const build = (w) => { builds++; return [`line@${w}`]; };
-	assert.deepEqual(cache.get(0, "text", build), ["line@40"]);
-	assert.deepEqual(cache.get(0, "text", build), ["line@40"]); // cached
+	assert.deepEqual(cache.get(0, "text", "text", build), ["line@40"]);
+	assert.deepEqual(cache.get(0, "text", "text", build), ["line@40"]); // cached
 	assert.equal(builds, 1);
 });
 
@@ -584,31 +584,40 @@ test("LineCache rebuilds when the text under a key changes (eviction reuses indi
 	const cache = new LineCache(40);
 	let builds = 0;
 	const build = (w) => { builds++; return [`@${w}`]; };
-	cache.get(0, "old", build);
-	cache.get(0, "new", build);
+	cache.get(0, "text", "old", build);
+	cache.get(0, "text", "new", build);
 	assert.equal(builds, 2);
 });
 
 test("LineCache keeps separate entries per key (segment index vs pending -1)", () => {
 	const cache = new LineCache(40);
 	const keyed = (key) => (w) => [`${key}@${w}`];
-	assert.deepEqual(cache.get(0, "same", keyed(0)), ["0@40"]);
-	assert.deepEqual(cache.get(1, "same", keyed(1)), ["1@40"]);
-	assert.deepEqual(cache.get(0, "same", keyed(0)), ["0@40"]); // key 0 still cached
-	assert.deepEqual(cache.get(-1, "same", keyed(-1)), ["-1@40"]); // pending key cached independently
+	assert.deepEqual(cache.get(0, "text", "same", keyed(0)), ["0@40"]);
+	assert.deepEqual(cache.get(1, "text", "same", keyed(1)), ["1@40"]);
+	assert.deepEqual(cache.get(0, "text", "same", keyed(0)), ["0@40"]); // key 0 still cached
+	assert.deepEqual(cache.get(-1, "text", "same", keyed(-1)), ["-1@40"]); // pending key cached independently
 });
 
 test("LineCache invalidates all entries when the width changes", () => {
 	const cache = new LineCache(40);
 	let builds = 0;
 	const build = (w) => { builds++; return [`@${w}`]; };
-	cache.get(0, "x", build);
+	cache.get(0, "text", "x", build);
 	cache.setWidth(50);
-	cache.get(0, "x", build);
+	cache.get(0, "text", "x", build);
 	cache.setWidth(50); // same width → no invalidation
-	cache.get(0, "x", build);
+	cache.get(0, "text", "x", build);
 	assert.equal(builds, 2);
 	assert.equal(cache.width, 50);
+});
+
+test("LineCache rebuilds when the kind under a key changes (thinking↔text collision)", () => {
+	const cache = new LineCache(40);
+	let builds = 0;
+	const build = (w) => { builds++; return [`@${w}`]; };
+	cache.get(0, "thinking", "foo", build);
+	cache.get(0, "text", "foo", build); // same key+text, different kind → rebuild
+	assert.equal(builds, 2);
 });
 
 test("resolveOptional returns the factory result and undefined on throw", () => {
