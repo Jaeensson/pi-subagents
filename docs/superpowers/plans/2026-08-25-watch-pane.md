@@ -1589,5 +1589,10 @@ details from the originally-written text:
 6. **Watch pane**: a finished selected task KEEPS its final view (`✓ done`,
    frozen elapsed, no `0/N`); auto-close only when nothing runs; the keybind
    is shared as `WATCH_PANE_KEYBIND` in core.ts.
-7. **Test counts**: final suite is 85 core + 52 live = 137 (grew as
-   regressions were pinned).
+7. **Test counts**: final suite is 85 core + 52 live + 3 runtime-hook tests
+   = 140 (grew as regressions were pinned).
+8. **Auto-close is batch-scoped**: the final review found chain steps
+   transiently zero out `runningTasks()`, closing the pane between steps.
+   Fixed via a runtime `setJobFinishedHook` fired from `checkJobComplete` on
+   `finished` — `maybeAutoCloseWatch` closes only when no task AND no job is
+   running; `isWatchOpen` was removed as unused.
