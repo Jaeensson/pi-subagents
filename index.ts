@@ -32,9 +32,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { killTask } from "./process.ts";
 import { seedBundledAgents } from "./agents.ts";
-import { clearRegistry, listRunningTasks, setMessageSender } from "./runtime.ts";
+import { clearRegistry, listRunningTasks, setJobFinishedHook, setMessageSender } from "./runtime.ts";
 import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, setUi } from "./tui.ts";
-import { disposeWatch, handleWatchInput } from "./watch.ts";
+import { disposeWatch, handleWatchInput, maybeAutoCloseWatch } from "./watch.ts";
 import { subagentAgentsTool } from "./tools/subagent-agents.ts";
 import { subagentStatusTool } from "./tools/subagent-status.ts";
 import { subagentWaitTool } from "./tools/subagent-wait.ts";
@@ -55,6 +55,9 @@ export default function (pi: ExtensionAPI) {
 			{ triggerTurn: true, deliverAs: "steer" },
 		);
 	});
+	// The job-finished hook drives the watch-pane auto-close: the pane closes
+	// only when a whole job batch completes, not between chain steps.
+	setJobFinishedHook(() => maybeAutoCloseWatch());
 	registerCompletionRenderer(pi);
 
 	// Seed bundled default agents (scout, researcher, worker, reviewer) into

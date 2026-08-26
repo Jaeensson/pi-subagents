@@ -9,7 +9,7 @@
 import { matchesKey, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { buildTraceView, emptyLiveTrace, type LiveTrace } from "./live.ts";
 import { formatElapsed, formatModelTag, WATCH_PANE_KEYBIND } from "./core.ts";
-import { tasks, type Task } from "./runtime.ts";
+import { jobs, tasks, type Task } from "./runtime.ts";
 import { formatToolCall, getWidgetTheme, getWidgetTui } from "./tui.ts";
 
 const TICK_MS = 150;
@@ -24,10 +24,6 @@ interface WatchState {
 let watchHandle: OverlayHandle | undefined;
 let watchState: WatchState | undefined;
 let watchTimer: NodeJS.Timeout | undefined;
-
-export function isWatchOpen(): boolean {
-	return watchState !== undefined;
-}
 
 function runningTasks(): Task[] {
 	return [...tasks.values()].filter((t) => t.status === "running");
@@ -71,9 +67,12 @@ export function disposeWatch(): void {
 	closeWatch();
 }
 
-/** Called from process.ts after task finalize: close when nothing is running. */
+/** Called when a job batch finishes: close the pane when nothing at all is running. */
 export function maybeAutoCloseWatch(): void {
-	if (watchState && runningTasks().length === 0) closeWatch();
+	if (!watchState) return;
+	const anyRunning = [...tasks.values()].some((t) => t.status === "running");
+	const anyJob = [...jobs.values()].some((j) => j.status === "running");
+	if (!anyRunning && !anyJob) closeWatch();
 }
 
 /**

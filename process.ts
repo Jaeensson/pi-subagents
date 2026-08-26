@@ -20,7 +20,6 @@ import {
 	type AgentSummary,
 } from "./core.ts";
 import { applyLiveEvent, emptyLiveTrace } from "./live.ts";
-import { maybeAutoCloseWatch } from "./watch.ts";
 import {
 	checkJobComplete,
 	decRunningCount,
@@ -84,7 +83,6 @@ function finalizeTask(task: Task, code: number | null) {
 	cleanupTaskTemp(task);
 	decRunningCount();
 	updateStatusWidget();
-	maybeAutoCloseWatch();
 	fireWaiters(taskWaiters, task.id);
 
 	const job = jobs.get(task.jobId);

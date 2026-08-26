@@ -145,9 +145,15 @@ export function clearRegistry(): void {
 // setMessageSender; kept as a hook so runtime.ts stays free of pi imports.
 
 let sendMessage: ((text: string, details: CompletionDetails) => void) | undefined;
+let jobFinishedHook: (() => void) | undefined;
 
 export function setMessageSender(fn: (text: string, details: CompletionDetails) => void): void {
 	sendMessage = fn;
+}
+
+/** Install a callback fired when a job batch finishes (drives the watch-pane auto-close). */
+export function setJobFinishedHook(fn: (() => void) | undefined): void {
+	jobFinishedHook = fn;
 }
 
 export function emptyUsage(): UsageStats {
@@ -289,6 +295,7 @@ export function checkJobComplete(job: Job) {
 	job.finished = true;
 	fireWaiters(jobWaiters, job.id);
 	maybeNotifyJob(job);
+	jobFinishedHook?.();
 }
 
 // ── Aggregation ──────────────────────────────────────────────────────────────
