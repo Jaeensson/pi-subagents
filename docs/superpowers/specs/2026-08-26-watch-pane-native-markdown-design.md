@@ -136,21 +136,27 @@ without caching.
 
 ## Testing
 
-Pure logic first, `node --test` (fail → pass), per AGENTS.md:
+The renderer (watch-render.ts) is thin glue over pi's Markdown component and
+ships no dedicated node --test suite: it imports pi-tui at module top, so it
+cannot run under Node's type stripping, and the no-theme / render-throw
+fallback branches have no injection seam (resolved via resolveOptional in the
+constructor). The testable core lives in live.ts and is covered by
+tests/live.test.mjs (TDD, fail → pass):
 
-- `tests/watch-render.test.mjs`:
-  1. Segment-kind classification: which kinds take the markdown path vs the
-     plain path (text/thinking → markdown; toolCall/toolOutput/marker → plain).
-  2. Cache behavior via an injected fake builder: same key → builder not called
-     again; text change → rebuilt; width change → invalidated; pending keyed on
-     string identity.
-  3. Fallback path: injected theme factory that throws → fallback renderer used.
-- Manual verification after wiring (`/reload`, spawn a live subagent): code
-  blocks colored with the theme's `syntax*` tokens, tables render, correct
-  transient fence look while streaming, scroll math stays consistent while
-  content streams, footer "N above" correct when scrolled.
-- Existing `tests/live.test.mjs`, `core.test.mjs`, `runtime.test.mjs` remain
-  green untouched.
+1. Segment-kind classification (`isMarkdownSegment`) — text/thinking → markdown,
+   toolCall/toolOutput → plain.
+2. LineCache behavior via injected fake builders — same key+kind+text reuse
+   (builder not called again), text change rebuilds, kind change rebuilds
+   (thinking↔text collision), per-key separation incl. the -1 pending key,
+   width change invalidates, same-width no-op.
+3. Fallback primitive (`resolveOptional`) — factory throws → undefined.
+
+The never-blank guarantees (no-theme → traceToLines, Markdown.render throw →
+plain per-line) are verified by a headless smoke run in Task 5 (real pi
+theme: syntax-highlighted fences emit distinct syntax* ANSI, headings/mdHeading
+colors, tables, memoized re-renders, line-count parity) and by the interactive
+pane checklist. This deviation is deliberate: the pure paradigm of this repo
+(core.ts/live.ts run under node --test) leaves TUI-glue untested by design.
 
 ## Out of scope
 

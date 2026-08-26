@@ -8,7 +8,8 @@
  * calls and tool output keep the plain per-kind styling.
  *
  * Cost: live.ts's LineCache memoizes rendered lines per segment, keyed by
- * width + text, so the pane's 150ms ticker re-renders only changed content.
+ * width + kind + text, so the pane's 150ms ticker re-renders only changed
+ * content (a kind or text change at the same index rebuilds that segment).
  * The markdown theme is resolved lazily via resolveOptional: when pi's theme
  * singleton is unavailable the renderer degrades to plain traceToLines so
  * the pane never blanks.
