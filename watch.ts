@@ -38,7 +38,13 @@ import {
 	resolveViewTop,
 	type LiveTrace,
 } from "./live.ts";
-import { formatElapsed, formatModelTag, WATCH_PANE_KEYBIND } from "./core.ts";
+import {
+	formatElapsed,
+	formatModelTag,
+	frameWatchPane,
+	watchPaneContentWidth,
+	WATCH_PANE_KEYBIND,
+} from "./core.ts";
 import { jobs, tasks, type Task } from "./runtime.ts";
 import { formatToolCall, getWidgetTheme, getWidgetTui } from "./tui.ts";
 import { TraceRenderer } from "./watch-render.ts";
@@ -76,14 +82,17 @@ function runningTasks(): Task[] {
 	return [...tasks.values()].filter((t) => t.status === "running");
 }
 
-/** Trace body rows inside the pane, excluding frame + header + footer. */
+/** Trace body rows inside the pane, excluding frame, padding, header and footer rows. */
 function contentHeight(tui: TUI): number {
-	return Math.max(2, Math.floor(tui.terminal.rows * 0.9) - 4);
+	// 90% of the terminal minus top/bottom borders, the two blank padding
+	// rows inside them, and the header + footer rows — the pane must stay
+	// within the overlay's 90% maxHeight (pi-tui clips overflow rows).
+	return Math.max(2, Math.floor(tui.terminal.rows * 0.9) - 6);
 }
 
-/** Content width inside the pane frame. */
+/** Content width inside the pane frame, after the one-column side padding. */
 function contentWidth(tui: TUI): number {
-	return (watchWidth > 0 ? watchWidth : Math.floor(tui.terminal.columns * 0.98)) - 2;
+	return watchPaneContentWidth(watchWidth > 0 ? watchWidth : Math.floor(tui.terminal.columns * 0.98));
 }
 
 /** Count the rendered trace lines of a task at the current pane width. */
@@ -294,7 +303,7 @@ function renderWatchPane(tui: TUI, width: number): string[] {
 			state.viewTop = FOLLOW_TAIL;
 		}
 	}
-	const bodyW = Math.max(1, width - 2);
+	const bodyW = watchPaneContentWidth(width);
 	const height = contentHeight(tui);
 	const trace: LiveTrace = task ? task.live : emptyLiveTrace();
 	const renderer = getTraceRenderer(bodyW);
@@ -307,11 +316,12 @@ function renderWatchPane(tui: TUI, width: number): string[] {
 	const header = buildHeader(task, running, state, theme);
 	const footer = buildFooter(top === maxTop, maxTop - top, theme);
 
-	const frame = theme.fg("border", "│");
-	const boxed = (line: string) => frame + padToWidth(line, bodyW) + frame;
-	const topBorder = theme.fg("border", `┌${"─".repeat(bodyW)}┐`);
-	const bottomBorder = theme.fg("border", `└${"─".repeat(bodyW)}┘`);
-	return [topBorder, boxed(header), ...visible.map(boxed), boxed(footer), bottomBorder];
+	return frameWatchPane({
+		lines: [header, ...visible, footer],
+		contentWidth: bodyW,
+		border: (text) => theme.fg("border", text),
+		padLine: padToWidth,
+	});
 }
 
 function buildHeader(task: Task | null, running: Task[], state: WatchState, theme: any): string {

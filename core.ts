@@ -12,6 +12,49 @@ export const NOTIFICATION_PREVIEW_BYTES = 200;
 /** Keybind that toggles the subagent watch pane (tui.ts hint + watch.ts matcher). */
 export const WATCH_PANE_KEYBIND = "shift+ctrl+w";
 
+// ── Watch pane frame layout ──────────────────────────────────────────────────
+
+/** Blank columns inset between the pane border and content, per side. */
+export const WATCH_PANE_PAD = 1;
+
+/**
+ * Interior columns available to trace text: the overlay width minus the two
+ * border columns and the side padding on both sides.
+ */
+export function watchPaneContentWidth(overlayWidth: number): number {
+	return Math.max(1, overlayWidth - 2 - 2 * WATCH_PANE_PAD);
+}
+
+/**
+ * Assemble the bordered watch pane so text never touches the frame: one
+ * blank row sits between each horizontal border and the first/last content
+ * row, and every row keeps `WATCH_PANE_PAD` blank columns on each side.
+ *
+ * `padLine` pads or truncates one already-styled line to exactly
+ * `contentWidth` visible columns (pi-tui's truncateToWidth in watch.ts);
+ * `border` styles border runs (theme.fg("border", …) in watch.ts).
+ */
+export function frameWatchPane(options: {
+	lines: string[];
+	contentWidth: number;
+	border: (text: string) => string;
+	padLine: (line: string, width: number) => string;
+}): string[] {
+	const { lines, contentWidth, border, padLine } = options;
+	const inner = contentWidth + 2 * WATCH_PANE_PAD;
+	const frame = border("│");
+	const blankRow = `${frame}${" ".repeat(inner)}${frame}`;
+	const boxed = (line: string) =>
+		`${frame}${" ".repeat(WATCH_PANE_PAD)}${padLine(line, contentWidth)}${" ".repeat(WATCH_PANE_PAD)}${frame}`;
+	return [
+		border(`┌${"─".repeat(inner)}┐`),
+		blankRow,
+		...lines.map(boxed),
+		blankRow,
+		border(`└${"─".repeat(inner)}┘`),
+	];
+}
+
 // ── Types (structural, shared with index.ts) ─────────────────────────────────
 
 export interface UsageStats {

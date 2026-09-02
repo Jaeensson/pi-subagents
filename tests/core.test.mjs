@@ -21,6 +21,8 @@ import {
 	displayAgentName,
 	formatCompletionNotification,
 	formatStatusReport,
+	frameWatchPane,
+	watchPaneContentWidth,
 	formatElapsed,
 	formatModelTag,
 	formatTokens,
@@ -926,6 +928,80 @@ test("reviewer shell access is constrained to read-only verification", () => {
 	const prompt = reviewer?.systemPrompt.toLowerCase() ?? "";
 	assert.ok(prompt.includes("read-only"), "reviewer prompt must pin bash to read-only operations");
 	assert.ok(prompt.includes("write files"), "reviewer prompt must keep forbidding file writes");
+});
+
+// ── Watch pane frame layout ─────────────────────────────────────────────────
+
+// Frame constants: corner + horizontal runs must span the frame columns plus
+// the side padding so borders meet the │ columns exactly.
+const PAD = 1;
+const frameRow = (left, right, inner) => `${left}${"─".repeat(inner)}${right}`;
+
+const identityPadLine = (line, width) => line.padEnd(width).slice(0, width);
+
+function framePane(lines, contentWidth) {
+	return frameWatchPane({
+		lines,
+		contentWidth,
+		border: (text) => text,
+		padLine: identityPadLine,
+	});
+}
+
+test("watchPaneContentWidth leaves room for the border and side padding", () => {
+	// 2 border columns + one blank padding column on each side.
+	assert.equal(watchPaneContentWidth(80), 80 - 2 - 2 * PAD);
+});
+
+test("watchPaneContentWidth clamps tiny widths to one content column", () => {
+	assert.equal(watchPaneContentWidth(3), 1);
+	assert.equal(watchPaneContentWidth(0), 1);
+});
+
+test("frameWatchPane insets text from the border and pads above and below", () => {
+	const contentWidth = 10;
+	const inner = contentWidth + 2 * PAD;
+	const rows = framePane(["hello"], contentWidth);
+
+	assert.deepEqual(rows, [
+		frameRow("┌", "┐", inner),
+		`│${" ".repeat(inner)}│`, // blank padding row under the top border
+		`│ hello${" ".repeat(contentWidth - 5)} │`, // one blank column inset per side
+		`│${" ".repeat(inner)}│`, // blank padding row over the bottom border
+		frameRow("└", "┘", inner),
+	]);
+});
+
+test("frameWatchPane pads and frames every content row to the same width", () => {
+	const contentWidth = 6;
+	const rows = framePane(["ab", "cdefgh"], contentWidth);
+	const body = rows.slice(2, 4);
+
+	assert.equal(body[0], `│ ab${" ".repeat(4)} │`);
+	assert.equal(body[1], `│ cdefgh │`);
+	// Padding rows, borders and content all share one visible width.
+	assert.equal(rows[0].length, contentWidth + 2 * PAD + 2);
+	assert.equal(rows[1].length, contentWidth + 2 * PAD + 2);
+	assert.equal(rows.at(-1).length, contentWidth + 2 * PAD + 2);
+});
+
+test("frameWatchPane styles border runs through the border callback", () => {
+	const styled = [];
+	const rows = frameWatchPane({
+		lines: ["x"],
+		contentWidth: 4,
+		border: (text) => {
+			styled.push(text);
+			return `<${text}>`;
+		},
+		padLine: identityPadLine,
+	});
+
+	assert.ok(styled.includes("│"));
+	assert.ok(styled.some((t) => t.startsWith("┌") && t.endsWith("┐")));
+	assert.ok(styled.some((t) => t.startsWith("└") && t.endsWith("┘")));
+	// The styled frame wraps the padded body.
+	assert.equal(rows[2], `<│> x${" ".repeat(3)} <│>`);
 });
 
 test("bundled agent prompts reference only tools and concepts this project provides", () => {
