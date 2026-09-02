@@ -317,7 +317,9 @@ function renderWatchPane(tui: TUI, width: number): string[] {
 	const footer = buildFooter(top === maxTop, maxTop - top, theme);
 
 	return frameWatchPane({
-		lines: [header, ...visible, footer],
+		header,
+		lines: visible,
+		footer,
 		contentWidth: bodyW,
 		border: (text) => theme.fg("border", text),
 		padLine: padToWidth,

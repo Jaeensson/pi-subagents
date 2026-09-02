@@ -939,9 +939,11 @@ const frameRow = (left, right, inner) => `${left}${"─".repeat(inner)}${right}`
 
 const identityPadLine = (line, width) => line.padEnd(width).slice(0, width);
 
-function framePane(lines, contentWidth) {
+function framePane(header, lines, footer, contentWidth) {
 	return frameWatchPane({
+		header,
 		lines,
+		footer,
 		contentWidth,
 		border: (text) => text,
 		padLine: identityPadLine,
@@ -958,37 +960,44 @@ test("watchPaneContentWidth clamps tiny widths to one content column", () => {
 	assert.equal(watchPaneContentWidth(0), 1);
 });
 
-test("frameWatchPane insets text from the border and pads above and below", () => {
+test("frameWatchPane pins header and footer to the borders and buffers the body", () => {
 	const contentWidth = 10;
 	const inner = contentWidth + 2 * PAD;
-	const rows = framePane(["hello"], contentWidth);
+	const rows = framePane("hello", ["a", "b"], "bye", contentWidth);
 
 	assert.deepEqual(rows, [
 		frameRow("┌", "┐", inner),
-		`│${" ".repeat(inner)}│`, // blank padding row under the top border
-		`│ hello${" ".repeat(contentWidth - 5)} │`, // one blank column inset per side
-		`│${" ".repeat(inner)}│`, // blank padding row over the bottom border
+		`│ hello${" ".repeat(contentWidth - 5)} │`, // header flush under the top border
+		`│${" ".repeat(inner)}│`, // blank row between header and body
+		`│ a${" ".repeat(contentWidth - 1)} │`,
+		`│ b${" ".repeat(contentWidth - 1)} │`,
+		`│${" ".repeat(inner)}│`, // blank row between body and footer
+		`│ bye${" ".repeat(contentWidth - 3)} │`, // footer flush over the bottom border
 		frameRow("└", "┘", inner),
 	]);
 });
 
 test("frameWatchPane pads and frames every content row to the same width", () => {
 	const contentWidth = 6;
-	const rows = framePane(["ab", "cdefgh"], contentWidth);
-	const body = rows.slice(2, 4);
+	const rows = framePane("h", ["ab", "cdefgh"], "f", contentWidth);
+	const body = rows.slice(3, 5);
 
 	assert.equal(body[0], `│ ab${" ".repeat(4)} │`);
 	assert.equal(body[1], `│ cdefgh │`);
-	// Padding rows, borders and content all share one visible width.
+	// Header, blank rows, borders and footer all share one visible width.
 	assert.equal(rows[0].length, contentWidth + 2 * PAD + 2);
 	assert.equal(rows[1].length, contentWidth + 2 * PAD + 2);
+	assert.equal(rows[2].length, contentWidth + 2 * PAD + 2);
+	assert.equal(rows.at(-2).length, contentWidth + 2 * PAD + 2);
 	assert.equal(rows.at(-1).length, contentWidth + 2 * PAD + 2);
 });
 
 test("frameWatchPane styles border runs through the border callback", () => {
 	const styled = [];
 	const rows = frameWatchPane({
+		header: "h",
 		lines: ["x"],
+		footer: "f",
 		contentWidth: 4,
 		border: (text) => {
 			styled.push(text);
@@ -1000,8 +1009,8 @@ test("frameWatchPane styles border runs through the border callback", () => {
 	assert.ok(styled.includes("│"));
 	assert.ok(styled.some((t) => t.startsWith("┌") && t.endsWith("┐")));
 	assert.ok(styled.some((t) => t.startsWith("└") && t.endsWith("┘")));
-	// The styled frame wraps the padded body.
-	assert.equal(rows[2], `<│> x${" ".repeat(3)} <│>`);
+	// The styled frame wraps the padded body (row 3 is the first body row).
+	assert.equal(rows[3], `<│> x${" ".repeat(3)} <│>`);
 });
 
 test("bundled agent prompts reference only tools and concepts this project provides", () => {

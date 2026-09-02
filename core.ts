@@ -26,21 +26,24 @@ export function watchPaneContentWidth(overlayWidth: number): number {
 }
 
 /**
- * Assemble the bordered watch pane so text never touches the frame: one
- * blank row sits between each horizontal border and the first/last content
- * row, and every row keeps `WATCH_PANE_PAD` blank columns on each side.
+ * Assemble the bordered watch pane so text never touches the side frame:
+ * the header sits flush under the top border and the footer flush over the
+ * bottom border, each buffered from the body by one blank row, and every
+ * row keeps `WATCH_PANE_PAD` blank columns on each side.
  *
  * `padLine` pads or truncates one already-styled line to exactly
  * `contentWidth` visible columns (pi-tui's truncateToWidth in watch.ts);
  * `border` styles border runs (theme.fg("border", …) in watch.ts).
  */
 export function frameWatchPane(options: {
+	header: string;
 	lines: string[];
+	footer: string;
 	contentWidth: number;
 	border: (text: string) => string;
 	padLine: (line: string, width: number) => string;
 }): string[] {
-	const { lines, contentWidth, border, padLine } = options;
+	const { header, lines, footer, contentWidth, border, padLine } = options;
 	const inner = contentWidth + 2 * WATCH_PANE_PAD;
 	const frame = border("│");
 	const blankRow = `${frame}${" ".repeat(inner)}${frame}`;
@@ -48,9 +51,11 @@ export function frameWatchPane(options: {
 		`${frame}${" ".repeat(WATCH_PANE_PAD)}${padLine(line, contentWidth)}${" ".repeat(WATCH_PANE_PAD)}${frame}`;
 	return [
 		border(`┌${"─".repeat(inner)}┐`),
+		boxed(header),
 		blankRow,
 		...lines.map(boxed),
 		blankRow,
+		boxed(footer),
 		border(`└${"─".repeat(inner)}┘`),
 	];
 }
