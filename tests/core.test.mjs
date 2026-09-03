@@ -1106,7 +1106,7 @@ test("slugifyName lowercases, strips invalid chars, caps length", () => {
 test("deriveTaskName prefers the explicit name and falls back to task slug + id suffix", () => {
 	assert.equal(deriveTaskName("My Task!", "whatever", "abcd-1234"), "my-task");
 	const fallback = deriveTaskName(undefined, "Fix the auth loop in middleware", "3f2a7b9c-1234");
-	assert.equal(fallback, "fix-the-auth-loop-in-middleware-3f2a");
+	assert.equal(fallback, "fix-the-auth-loop-in-middle-3f2a"); // capped at 32
 	assert.equal(deriveTaskName(undefined, "!!!", "3f2a7b9c"), "3f2a");
 	assert.equal(deriveTaskName(undefined, "!!!", "----"), undefined);
 });
