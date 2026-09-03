@@ -302,6 +302,7 @@ function maybeNotifyJob(job: Job) {
 		text = formatCompletionNotification(
 			job.tasks.map((t) => ({
 				agent: t.agent,
+				name: t.name,
 				status: taskStatusLabel(t),
 				output: getResultOutput(t),
 				errorMessage: t.errorMessage,

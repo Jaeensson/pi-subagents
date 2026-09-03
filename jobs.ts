@@ -23,7 +23,7 @@ import {
 	type CatalogModel,
 	type TierConfig,
 } from "./core.ts";
-import { killTask, pauseJobTasks, spawnTask } from "./process.ts";
+import { flushJobStatus, killTask, pauseJobTasks, spawnTask } from "./process.ts";
 import { emptyLiveTrace } from "./live.ts";
 import {
 	isResumableJob,
@@ -232,6 +232,7 @@ export function runChainFrom(
 		if (job.status === "running") job.status = "completed";
 		job.chainRunnerDone = true;
 		checkJobComplete(job);
+		flushJobStatus(job);
 	})();
 }
 

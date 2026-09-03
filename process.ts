@@ -112,13 +112,18 @@ function finalizeTask(task: Task, code: number | null) {
 	}
 
 	// Durable record: resolve the session file (the child may have created it
-	// after our spawn-time flush) and write the final task entry.
+	// after our spawn-time flush) and write the final task entry. When this
+	// finalize completes the whole job, flush the job-level status too.
 	const root = getJobsRoot();
 	const psid = job?.parentSessionId;
 	if (root && psid) {
 		if (!task.sessionFile && task.sessionDir) task.sessionFile = resolveSessionFile(task.sessionDir, task.id);
 		void updateManifest(root, psid, task.jobId, (m) => {
 			upsertManifestTask(m, toManifestTask(task));
+			if (job?.finished) {
+				m.status = job.status;
+				if (job.errorMessage) m.errorMessage = job.errorMessage;
+			}
 		}).catch(() => {
 			/* best-effort */
 		});
@@ -284,6 +289,18 @@ export function pauseJobTasks(job: Job): Task[] {
 		killTask(t);
 	}
 	return affected;
+}
+
+/** Flush the job-level status to its manifest (best-effort; used by the chain runner). */
+export function flushJobStatus(job: Job): void {
+	const root = getJobsRoot();
+	if (!root || !job.parentSessionId) return;
+	void updateManifest(root, job.parentSessionId, job.id, (m) => {
+		m.status = job.status;
+		if (job.errorMessage) m.errorMessage = job.errorMessage;
+	}).catch(() => {
+		/* best-effort */
+	});
 }
 
 /**

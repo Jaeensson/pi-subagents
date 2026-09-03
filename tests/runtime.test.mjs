@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkJobComplete, setJobFinishedHook } from "../runtime.ts";
+import { checkJobComplete, setJobFinishedHook, setMessageSender } from "../runtime.ts";
 
 /** Minimal fake job; checkJobComplete only reads the fields it needs. */
 function makeJob(id, mode = "single") {
@@ -79,4 +79,25 @@ test("checkJobComplete stays open while tasks are paused", () => {
 	job.tasks[1].status = "completed";
 	checkJobComplete(job);
 	assert.equal(job.finished, true);
+});
+
+test("completion notification includes the task name", () => {
+	const seen = [];
+	setMessageSender((text) => seen.push(text));
+	try {
+		const job = makeJob("j-named");
+		job.notifyOnComplete = true;
+		job.tasks = [
+			{
+				id: "t1", jobId: job.id, agent: "worker", name: "feat-1", status: "completed",
+				exitCode: 0, stopReason: "end",
+				messages: [{ role: "assistant", content: [{ type: "text", text: "done output" }] }],
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+			},
+		];
+		checkJobComplete(job);
+		assert.match(seen[0], /\[worker\/feat-1\]/);
+	} finally {
+		setMessageSender(undefined);
+	}
 });
