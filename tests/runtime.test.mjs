@@ -68,3 +68,15 @@ test("job-finished hook fires when the chain runner finishes the batch", () => {
 		setJobFinishedHook(undefined);
 	}
 });
+test("checkJobComplete stays open while tasks are paused", () => {
+	const job = makeJob("j-paused");
+	job.tasks = [
+		{ id: "t1", jobId: job.id, status: "completed" },
+		{ id: "t2", jobId: job.id, status: "paused" },
+	];
+	checkJobComplete(job);
+	assert.equal(job.finished, false);
+	job.tasks[1].status = "completed";
+	checkJobComplete(job);
+	assert.equal(job.finished, true);
+});

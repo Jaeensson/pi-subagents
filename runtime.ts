@@ -24,7 +24,7 @@ import type { LiveTrace } from "./live.ts";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type TaskStatus = "running" | "completed" | "failed" | "aborted";
+export type TaskStatus = "running" | "completed" | "failed" | "aborted" | "paused" | "interrupted";
 export type JobMode = "single" | "parallel" | "chain";
 
 export interface Task {
@@ -50,6 +50,14 @@ export interface Task {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	/** Human-readable session name (slug); shown in the widget and reports. */
+	name?: string;
+	/** Set by subagent_pause: the next finalize marks the task `paused`. */
+	pauseRequested?: boolean;
+	/** Child session dir/file when running with a durable session. */
+	sessionDir?: string;
+	sessionFile?: string;
+	finishedAt?: number;
 	proc?: ChildProcess;
 	tmpDir?: string;
 	tmpPath?: string;
@@ -67,6 +75,8 @@ export interface Job {
 	finished: boolean;
 	chainRunnerDone: boolean;
 	pendingSpawns: number;
+	/** Parent session bucket this job persists under (undefined = legacy in-memory only). */
+	parentSessionId?: string;
 	emit?: (content: string, details: ToolDetails) => void;
 }
 
@@ -78,6 +88,8 @@ export interface TaskInfo {
 	status: TaskStatus;
 	exitCode: number;
 	step?: number;
+	name?: string;
+	finishedAt?: number;
 	messages: MessageLike[];
 	usage: UsageStats;
 	model?: string;
@@ -112,6 +124,24 @@ const jobWaiters = new Map<string, Array<() => void>>();
 // (never reassign) so all modules share one registry instance.
 
 export { jobs, tasks, taskWaiters };
+
+// ── Session-scoped persistence holders (set by index.ts at session_start) ────
+
+let parentSessionId: string | undefined;
+let jobsRoot: string | undefined;
+
+export function setParentSessionId(id: string | undefined): void {
+	parentSessionId = id;
+}
+export function getParentSessionId(): string | undefined {
+	return parentSessionId;
+}
+export function setJobsRoot(root: string | undefined): void {
+	jobsRoot = root;
+}
+export function getJobsRoot(): string | undefined {
+	return jobsRoot;
+}
 
 let runningCount = 0;
 
@@ -180,6 +210,8 @@ export function toTaskInfo(t: Task): TaskInfo {
 		tierNote: t.tierNote,
 		stopReason: t.stopReason,
 		errorMessage: t.errorMessage,
+		name: t.name,
+		finishedAt: t.finishedAt,
 	};
 }
 
@@ -293,7 +325,7 @@ export function checkJobComplete(job: Job) {
 		if (!job.chainRunnerDone) return;
 	} else {
 		if (job.pendingSpawns > 0) return;
-		if (job.tasks.length === 0 || job.tasks.some((t) => t.status === "running")) return;
+		if (job.tasks.length === 0 || job.tasks.some((t) => t.status === "running" || t.status === "paused")) return;
 	}
 	if (job.status === "running") job.status = "completed";
 	job.finished = true;
