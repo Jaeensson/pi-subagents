@@ -30,12 +30,23 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { killTask } from "./process.ts";
+import { killTask, markInterruptedSweep } from "./process.ts";
 import { seedBundledAgents } from "./agents.ts";
-import { clearRegistry, listRunningTasks, setJobFinishedHook, setMessageSender } from "./runtime.ts";
-import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, setUi } from "./tui.ts";
+import {
+	clearRegistry,
+	listRunningTasks,
+	setJobFinishedHook,
+	setMessageSender,
+	setJobsRoot,
+	setParentSessionId,
+} from "./runtime.ts";
+import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, registerInterruptedRenderer, INTERRUPTED_MESSAGE_TYPE, setUi } from "./tui.ts";
+import { deletePath, isJobExpired, isResumableJob, listJobManifests, pruneEmptyBuckets } from "./store.ts";
+import { formatJobListings, getDefaultJobsRoot, listJobsForCurrentSession, readJobRetentionDays } from "./jobs.ts";
 import { disposeWatch, handleWatchInput, maybeAutoCloseWatch } from "./watch.ts";
 import { subagentAgentsTool } from "./tools/subagent-agents.ts";
+import { subagentPauseTool } from "./tools/subagent-pause.ts";
+import { subagentResumeTool } from "./tools/subagent-resume.ts";
 import { subagentStatusTool } from "./tools/subagent-status.ts";
 import { subagentWaitTool } from "./tools/subagent-wait.ts";
 import { subagentTool } from "./tools/subagent.ts";
@@ -59,12 +70,49 @@ export default function (pi: ExtensionAPI) {
 	// only when a whole job batch completes, not between chain steps.
 	setJobFinishedHook(() => maybeAutoCloseWatch());
 	registerCompletionRenderer(pi);
+	registerInterruptedRenderer(pi);
 
 	// Seed bundled default agents (scout, researcher, worker, reviewer) into
 	// ~/.pi/agent/agents when missing — existing user files always win.
 	seedBundledAgents();
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
+		// Session-scoped persistence: bind the store bucket, GC old jobs, and
+		// surface resumable jobs from a previous run of THIS session.
+		const psid = ctx.sessionManager?.getSessionId?.();
+		setParentSessionId(psid);
+		const root = getDefaultJobsRoot();
+		setJobsRoot(root);
+		if (psid) {
+			try {
+				const retention = readJobRetentionDays();
+				const entries = listJobManifests(root).filter((e) => e.parentSessionId === psid);
+				const now = Date.now();
+				for (const e of entries) {
+					if (isJobExpired(e.manifest.updatedAt, now, retention)) await deletePath(e.dir);
+				}
+				await pruneEmptyBuckets(root);
+				// Surface only when THIS session starts/resumes; a brand-new session
+				// gets a fresh id and must never see another session's jobs (spec).
+				if (event.reason === "startup" || event.reason === "resume") {
+					const resumable = listJobManifests(root).filter(
+						(e) => e.parentSessionId === psid && isResumableJob(e.manifest),
+					);
+					if (resumable.length > 0) {
+						api.sendMessage(
+							{
+								customType: INTERRUPTED_MESSAGE_TYPE,
+								content: `${formatJobListings(listJobsForCurrentSession())}\n\nResume with subagent_resume { jobId: "…" } — or omit jobId to list all.`,
+								display: true,
+							},
+							{ triggerTurn: false },
+						);
+					}
+				}
+			} catch {
+				/* store problems never block startup */
+			}
+		}
 		if (!ctx.hasUI) return;
 		setUi(ctx.ui);
 		ctx.ui.onTerminalInput((data) => handleWatchInput(data));
@@ -75,6 +123,13 @@ export default function (pi: ExtensionAPI) {
 		setUi(undefined);
 		disposeWidget();
 		disposeWatch();
+		// Durable record first: mark non-terminal tasks `interrupted` and flush
+		// their manifests BEFORE killing children (their exit events then no-op).
+		try {
+			await markInterruptedSweep();
+		} catch {
+			/* best-effort */
+		}
 		for (const t of listRunningTasks()) killTask(t);
 		clearRegistry();
 	});
@@ -83,4 +138,6 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(subagentWaitTool);
 	pi.registerTool(subagentStatusTool);
 	pi.registerTool(subagentAgentsTool);
+	pi.registerTool(subagentPauseTool);
+	pi.registerTool(subagentResumeTool);
 }

@@ -142,6 +142,30 @@ export function registerCompletionRenderer(pi: ExtensionAPI): void {
 	});
 }
 
+// ── Interrupted-jobs card ────────────────────────────────────────────────
+//
+// Injected (no turn trigger) on session_start when this session's store bucket
+// holds resumable jobs from a previous run of the same session:
+//
+//   ⏸ Interrupted subagent jobs found
+//   Subagent jobs for session <id>:
+//   - <jobId> [chain] interrupted 1/3 done · resumable · …
+//   Resume with subagent_resume { jobId: "…" } — or omit jobId to list all.
+
+/** Custom message type for the interrupted-jobs card (session resume). */
+export const INTERRUPTED_MESSAGE_TYPE = "subagent-jobs-interrupted";
+
+/** Register the interrupted-jobs card renderer (extension entry, once at load). */
+export function registerInterruptedRenderer(pi: ExtensionAPI): void {
+	pi.registerMessageRenderer(INTERRUPTED_MESSAGE_TYPE, (message, { outputPad }, theme) => {
+		const content = typeof message.content === "string" ? message.content : "";
+		const box = new Box(outputPad, 1, (line) => theme.bg("customMessageBg", line));
+		box.addChild(new Text(theme.fg("warning", "⏸ Interrupted subagent jobs found"), 0, 0));
+		box.addChild(new Text(content, 0, 0));
+		return box;
+	});
+}
+
 /** Collapsed: the per-agent ✓/✗ lines and footer; expanded: the full summary text. */
 function completionBody(content: string, expanded: boolean): string {
 	const text = content.trim();
@@ -250,7 +274,8 @@ function runningTaskLines(theme: any, width: number): string[] {
 				: "";
 		const modelTag = formatModelTag(t.model);
 		const modelText = modelTag ? ` ${theme.fg("dim", modelTag)}` : "";
-		lines.push(`  ${theme.fg("warning", "▸")} ${theme.fg("accent", t.agent)}${modelText}${theme.fg("dim", ` ${elapsed}`)}${step}  ${lastActivity(t, theme)}`);
+		const name = t.name ? theme.fg("accent", ` ${t.name}`) : "";
+		lines.push(`  ${theme.fg("warning", "▸")} ${theme.fg("accent", t.agent)}${name}${modelText}${theme.fg("dim", ` ${elapsed}`)}${step}  ${lastActivity(t, theme)}`);
 	}
 	return lines.map((line) => truncateToWidth(line, width));
 }
