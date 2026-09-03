@@ -25,10 +25,12 @@ Agent definitions live in `~/.pi/agent/agents/*.md` (see
 
 | Tool | Purpose |
 |------|---------|
-| `subagent` | Spawn subagents: single, parallel, or chain. `wait: true` (default) blocks and returns results; `wait: false` spawns in the background and returns a `jobId` immediately. |
+| `subagent` | Spawn subagents: single, parallel, or chain. `wait: true` (default) blocks and returns results; `wait: false` spawns in the background and returns a `jobId` immediately. Optional `name` gives the session a human-readable label shown in the status widget. |
 | `subagent_wait` | Block until background subagents finish and return their full results (`{ jobIds, timeoutSeconds? }`). |
-| `subagent_status` | Non-blocking progress check for background subagents (`{ jobIds }`). |
+| `subagent_status` | Non-blocking progress check for background subagents (`{ jobIds? }`). Omit `jobIds` to list all jobs for this session, including interrupted jobs from a previous run of it. |
 | `subagent_agents` | List available agent definitions from `~/.pi/agent/agents`. |
+| `subagent_pause` | Gracefully pause a running background job (`{ jobId }`): tasks finalize with their transcripts on disk and can be resumed later. |
+| `subagent_resume` | Resume interrupted/paused jobs from a previous run of THIS session: `{}` lists them; `{ jobId }` continues where the tasks left off. |
 
 ## Usage
 
@@ -108,6 +110,29 @@ syntax-highlighted code blocks (thinking stays italic thinkingText):
   back into the conversation or model context; completed results are exactly
   as before via `subagent_wait` / the completion card.
 
+## Durability & resume
+
+Subagent work survives session death (crash, power loss, SSH drop, plain
+`/exit`):
+
+- Every child runs with its own pi session under
+  `~/.pi/agent/subagent-jobs/<parent-session-id>/<job-id>/tasks/` — the
+  transcript is durably on disk as the agent works. A small `manifest.json`
+  per job tracks statuses, usage, and final outputs.
+- Jobs are **bound to the parent session**: `pi -c` / `/resume` of that
+  session surfaces an "interrupted jobs" card listing what was mid-flight.
+  A brand-new session never sees another session's jobs.
+- Nothing resumes automatically. Resume on demand with
+  `subagent_resume { jobId }` — interrupted tasks continue from their own
+  transcript (chain jobs pick up at the lowest incomplete step); or inspect
+  first with `subagent_status {}` / `subagent_resume {}`.
+- Pause instead of killing: `subagent_pause { jobId }` gracefully stops the
+  running tasks; resume them any time later.
+- Only `completed` is terminal. Paused, interrupted, and aborted tasks are
+  all resumable while their job exists in the store.
+- Job store retention: `subagent.jobRetentionDays` in settings.json (default
+  7; `0` keeps everything forever).
+
 ## Agent definitions
 
 `~/.pi/agent/agents/*.md` — markdown with YAML frontmatter and a system prompt
@@ -179,12 +204,16 @@ through a central mapping in pi's `settings.json`:
 
 ## How it works
 
-Each subagent runs `pi --mode json -p --no-session --no-extensions
---no-skills --no-prompt-templates` with the agent's system prompt appended and
-the task as the prompt. Children are lean (no extension recursion) and read the
-same user config (model, API keys) as the parent. JSON events from the child's
-stdout are parsed for messages, usage (tokens/cost), and errors. Background
-jobs are tracked in an in-memory registry inside the extension process.
+Each subagent runs `pi --mode json -p --session-dir <tasksDir> --session-id
+<taskId> --no-extensions --no-skills --no-prompt-templates` with the agent's
+system prompt appended and the task as the prompt (resumes use
+`--session <file>` plus a continuation prompt). Children are lean (no
+extension recursion) and read the same user config (model, API keys) as the
+parent. JSON events from the child's stdout are parsed for messages, usage
+(tokens/cost), and errors, while pi itself durably journals the child's
+transcript to the job store. Background jobs are tracked in an in-memory
+registry inside the extension process, mirrored by per-job manifests on disk
+at lifecycle boundaries.
 
 ## Development
 
