@@ -19,15 +19,15 @@ import {
 	isFailedState,
 	resolveAgent,
 	shouldNotify,
+	statusIcon,
 	truncateOutput,
 } from "../core.ts";
-import { buildModelContext, createJob, mapWithConcurrencyLimit, runChain, spawnResultText } from "../jobs.ts";
+import { buildModelContext, createJob, mapWithConcurrencyLimit, MAX_CONCURRENCY, runChain, spawnResultText } from "../jobs.ts";
 import { killTask, spawnTask, waitForJobOrKill } from "../process.ts";
-import { aggregateUsage, jobDetails, waitForTask, type TaskInfo, type ToolDetails } from "../runtime.ts";
+import { aggregateUsage, jobDetails, getParentSessionId, getJobsRoot, waitForTask, type TaskInfo, type ToolDetails } from "../runtime.ts";
 import { getDisplayItems, renderTaskList } from "../tui.ts";
 
 const MAX_PARALLEL_TASKS = 8;
-const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 
 // ── Schema ───────────────────────────────────────────────────────────────────
@@ -55,6 +55,7 @@ const TaskItem = Type.Object({
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	tier: taskTierParam,
+	name: Type.Optional(Type.String({ description: "Short session name for this task (shown in the status widget)." })),
 });
 
 const ChainItem = Type.Object({
@@ -62,6 +63,7 @@ const ChainItem = Type.Object({
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	tier: taskTierParam,
+	name: Type.Optional(Type.String({ description: "Short session name for this task (shown in the status widget)." })),
 });
 
 const subagentParams = Type.Object({
@@ -73,7 +75,17 @@ const subagentParams = Type.Object({
 	notifyOnComplete: Type.Optional(Type.Boolean({ description: "When wait: false, deliver a summary message when the batch finishes. Default: true.", default: true })),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 	tier: singleTierParam,
+	name: Type.Optional(Type.String({ description: 'Short human-readable name for this subagent session (single mode), e.g. "feature1-implementation". Shown in the status widget. Defaults to a slug of the task.' })),
 });
+
+
+/** Themed per-status icon shared by the result renderers. */
+function themedStatusIcon(status: string, theme: any): string {
+	const icon = statusIcon(status);
+	if (icon === "✓") return theme.fg("success", icon);
+	if (icon === "✗") return theme.fg("error", icon);
+	return theme.fg("warning", icon);
+}
 
 // ── Tool definition ──────────────────────────────────────────────────────────
 
@@ -133,9 +145,15 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			};
 		}
 
+		// Durable persistence: bind the job to this parent session's store bucket.
+		const persist =
+			getParentSessionId() && getJobsRoot()
+				? { parentSessionId: getParentSessionId()!, chain: hasChain ? params.chain : undefined }
+				: undefined;
+
 		// ── Chain mode ──
 		if (hasChain) {
-			const job = createJob("chain", shouldNotify(wait, notifyOnComplete), emit, params.chain!.length);
+			const job = createJob("chain", shouldNotify(wait, notifyOnComplete), emit, params.chain!.length, persist);
 			runChain(job, params.chain!, agents, params.cwd ?? ctx.cwd, modelCtx, wait ? signal : undefined);
 			if (!wait) {
 				return { content: [{ type: "text", text: spawnResultText(job, "chain") }], details: jobDetails(job) };
@@ -171,11 +189,11 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 					details: { mode: "parallel" as const, jobIds: [], tasks: [] },
 				};
 			}
-			const job = createJob("parallel", shouldNotify(wait, notifyOnComplete), emit);
+			const job = createJob("parallel", shouldNotify(wait, notifyOnComplete), emit, undefined, persist);
 			if (wait) {
 				await mapWithConcurrencyLimit(tasksParam, MAX_CONCURRENCY, async (t) => {
 					const agent = resolveAgent(t.agent, agents)!;
-					const task = await spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, { tier: t.tier, modelCtx });
+					const task = await spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, { tier: t.tier, name: t.name, modelCtx });
 					const completed = await waitForTask(task.id, { signal });
 					if (!completed && signal?.aborted) {
 						killTask(task);
@@ -203,15 +221,15 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			}
 			for (const t of tasksParam) {
 				const agent = resolveAgent(t.agent, agents)!;
-				void spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, { tier: t.tier, modelCtx });
+				void spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, { tier: t.tier, name: t.name, modelCtx });
 			}
 			return { content: [{ type: "text", text: spawnResultText(job, "parallel") }], details: jobDetails(job) };
 		}
 
 		// ── Single mode ──
 		const agent = resolveAgent(params.agent, agents)!;
-		const job = createJob("single", shouldNotify(wait, notifyOnComplete), emit);
-		const task = await spawnTask(agent, params.task ?? "", params.cwd ?? ctx.cwd, job.id, { tier: params.tier, modelCtx });
+		const job = createJob("single", shouldNotify(wait, notifyOnComplete), emit, undefined, persist);
+		const task = await spawnTask(agent, params.task ?? "", params.cwd ?? ctx.cwd, job.id, { tier: params.tier, name: params.name, modelCtx });
 		if (!wait) {
 			return { content: [{ type: "text", text: spawnResultText(job, "single") }], details: jobDetails(job) };
 		}
@@ -271,7 +289,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 		if (details.mode === "collect") {
 			const lines: string[] = [];
 			for (const t of details.tasks) {
-				const icon = t.status === "completed" ? theme.fg("success", "✓") : t.status === "running" ? theme.fg("warning", "⏳") : theme.fg("error", "✗");
+				const icon = themedStatusIcon(t.status, theme);
 				lines.push(`${icon} ${theme.fg("accent", t.agent)}${theme.fg("dim", ` (${t.status})`)}`);
 				if (!expanded) {
 					const preview = getFinalOutput(t.messages).split("\n").slice(0, 2).join("\n");
@@ -294,7 +312,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			const icon = successCount === details.tasks.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
 			lines.push(`${icon} ${theme.fg("toolTitle", theme.bold("chain "))}${theme.fg("accent", `${successCount}/${details.tasks.length} steps`)}`);
 			for (const t of details.tasks) {
-				const tIcon = t.status === "completed" ? theme.fg("success", "✓") : t.status === "running" ? theme.fg("warning", "⏳") : theme.fg("error", "✗");
+				const tIcon = themedStatusIcon(t.status, theme);
 				lines.push(`\n${theme.fg("muted", `─── Step ${t.step ?? "?"}: `)}${theme.fg("accent", t.agent)} ${tIcon}`);
 				lines.push(renderTaskList(renderItems(t), expanded ? Infinity : 5, theme));
 				const output = getFinalOutput(t.messages);
@@ -309,7 +327,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			const status = isRunning ? `${successCount + failCount}/${details.tasks.length} done, ${running} running` : `${successCount}/${details.tasks.length} tasks`;
 			lines.push(`${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`);
 			for (const t of details.tasks) {
-				const tIcon = t.status === "completed" ? theme.fg("success", "✓") : t.status === "running" ? theme.fg("warning", "⏳") : theme.fg("error", "✗");
+				const tIcon = themedStatusIcon(t.status, theme);
 				lines.push(`\n${theme.fg("muted", "─── ")}${theme.fg("accent", t.agent)} ${tIcon}`);
 				lines.push(renderTaskList(renderItems(t), expanded ? Infinity : 5, theme));
 				const output = getFinalOutput(t.messages);
@@ -318,7 +336,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 		} else {
 			const t = details.tasks[0];
 			const isError = isFailedState(t);
-			const icon = isError ? theme.fg("error", "✗") : t.status === "running" ? theme.fg("warning", "⏳") : theme.fg("success", "✓");
+			const icon = isError && t.status !== "paused" ? theme.fg("error", "✗") : themedStatusIcon(t.status, theme);
 			lines.push(`${icon} ${theme.fg("toolTitle", theme.bold(t.agent))}${theme.fg("muted", ` (${t.agentSource})`)}`);
 			if (t.status === "running") {
 				lines.push(theme.fg("muted", "(running in background...)"));

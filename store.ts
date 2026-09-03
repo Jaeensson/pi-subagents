@@ -325,13 +325,8 @@ export function resumePlan(m: ManifestV1): ResumePlan | undefined {
 
 // ── Listing merge (pure) ─────────────────────────────────────────────────────
 
-export interface ListingRow {
-	id: string;
-	[key: string]: unknown;
-}
-
 /** Registry rows win over disk rows; both are kept otherwise. */
-export function mergeJobListings<T extends ListingRow>(registry: T[], persisted: T[]): T[] {
+export function mergeJobListings<T extends { id: string }>(registry: T[], persisted: T[]): T[] {
 	const registryIds = new Set(registry.map((r) => r.id));
 	return [...registry, ...persisted.filter((r) => !registryIds.has(r.id))];
 }

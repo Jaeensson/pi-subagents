@@ -16,24 +16,45 @@ import {
 	getFinalOutput,
 	getResultOutput,
 	isFailedState,
+	isResumableStatus,
 	normalizeTierConfig,
 	resolveAgent,
 	type AgentSummary,
 	type CatalogModel,
 	type TierConfig,
 } from "./core.ts";
-import { killTask, spawnTask } from "./process.ts";
-import { MANIFEST_VERSION, upsertManifestTask, toManifestTask, updateManifest, writeManifest, type ManifestChainStep } from "./store.ts";
+import { killTask, pauseJobTasks, spawnTask } from "./process.ts";
+import { emptyLiveTrace } from "./live.ts";
+import {
+	isResumableJob,
+	listJobManifests,
+	MANIFEST_VERSION,
+	mergeJobListings,
+	readManifest,
+	resumePlan,
+	upsertManifestTask,
+	toManifestTask,
+	updateManifest,
+	writeManifest,
+	type ManifestChainStep,
+} from "./store.ts";
 import {
 	checkJobComplete,
+	emptyUsage,
+	getParentSessionId,
+	getJobsRoot,
 	jobs,
 	waitForTask,
 	type Job,
 	type JobMode,
 	type ModelContext,
 	type Task,
+	type TaskInfo,
 	type ToolDetails,
 } from "./runtime.ts";
+
+/** Max concurrently running tasks in parallel mode. */
+export const MAX_CONCURRENCY = 4;
 
 // ── Model tier context ───────────────────────────────────────────────────────
 
@@ -266,4 +287,233 @@ export function collectResultText(jobIds: string[], timeoutNote?: string): { tex
 	if (unknown.length > 0) parts.push(`Unknown job id(s) (not found in this session): ${unknown.join(", ")}`);
 	if (timeoutNote) parts.push(timeoutNote);
 	return { text: parts.join("\n\n---\n\n"), anyFailed };
+}
+
+// ── Pause & resume ───────────────────────────────────────────────────────────
+
+export function pauseJob(jobId: string): { job: Job; paused: Task[] } | undefined {
+	const job = jobs.get(jobId);
+	if (!job) return undefined;
+	return { job, paused: pauseJobTasks(job) };
+}
+
+export interface ResumeInit {
+	agents: AgentSummary[];
+	defaultCwd: string;
+	modelCtx: ModelContext;
+	wait: boolean;
+	notifyOnComplete: boolean;
+	emit?: (content: string, details: ToolDetails) => void;
+	signal?: AbortSignal;
+}
+
+/**
+ * Rebuild a persisted job into the live registry and re-spawn its resumable
+ * tasks (on their session files) plus any fresh chain steps. Returns the live
+ * job plus advisory notes, or an error string.
+ */
+export async function resumeJob(
+	jobId: string,
+	init: ResumeInit,
+): Promise<{ job?: Job; notes?: string[]; error?: string }> {
+	const root = getJobsRoot();
+	const psid = getParentSessionId();
+	if (!root || !psid) return { error: "No durable job store for this session." };
+	const manifest = readManifest(root, psid, jobId);
+	if (!manifest) {
+		return { error: `No persisted job "${jobId}" for this session (jobs are bound to the session that spawned them).` };
+	}
+	if (jobs.has(jobId)) return { error: `Job ${jobId} is already active in this session.` };
+	const plan = resumePlan(manifest);
+	if (!plan) return { error: `Job ${jobId} is not resumable (status: ${manifest.status}).` };
+
+	// Rebuild the registry job. Completed tasks come back with their manifest
+	// finalOutput as a synthetic assistant message so every existing render
+	// path (getFinalOutput, task lists, usage) works unchanged.
+	const job: Job = {
+		id: manifest.jobId,
+		mode: manifest.mode,
+		status: "running",
+		tasks: [],
+		chainTotal: manifest.chainTotal,
+		notifyOnComplete: init.notifyOnComplete,
+		notified: false,
+		finished: false,
+		chainRunnerDone: false,
+		pendingSpawns: 0,
+		emit: init.emit,
+		parentSessionId: psid,
+	};
+	for (const t of manifest.tasks) {
+		if (t.status === "completed") {
+			job.tasks.push({
+				id: t.taskId,
+				jobId: job.id,
+				agent: t.agent,
+				agentSource: "manifest",
+				task: t.task,
+				cwd: t.cwd,
+				status: "completed",
+				startedAt: t.startedAt,
+				finishedAt: t.finishedAt,
+				exitCode: 0,
+				name: t.name,
+				messages: t.finalOutput
+					? [{ role: "assistant", content: [{ type: "text", text: t.finalOutput }] }]
+					: [],
+				live: emptyLiveTrace(),
+				stderr: "",
+				usage: { ...emptyUsage(), ...t.usage },
+				model: t.model,
+				step: t.step,
+				sessionFile: t.sessionFile,
+			});
+		}
+	}
+	jobs.set(job.id, job);
+
+	// Flush the manifest back to running before spawning (write-ordering).
+	void updateManifest(root, psid, job.id, (m) => {
+		m.status = "running";
+		m.notifyOnComplete = init.notifyOnComplete;
+	}).catch(() => {
+		/* best-effort */
+	});
+
+	const notes: string[] = [];
+	// Spawn one resumable task on its session transcript. Shared by the
+	// fire-and-forget path (single/chain) and the rate-limited path (parallel).
+	const respawn = (t: (typeof plan.respawnTasks)[number]) => {
+		const agent = resolveAgent(t.agent, init.agents);
+		if (!agent) {
+			notes.push(`agent "${t.agent}" no longer defined; task ${t.name ?? t.taskId} runs on the default agent`);
+		}
+		const sessionFile = t.sessionFile;
+		if (!sessionFile) {
+			notes.push(`session file missing for task ${t.name ?? t.taskId}; re-running from scratch`);
+		}
+		return spawnTask(agent ?? resolveAgent(undefined, init.agents)!, t.task, t.cwd, job.id, {
+			step: t.step,
+			tier: t.model ? undefined : t.tier,
+			modelOverride: t.model,
+			name: t.name,
+			modelCtx: init.modelCtx,
+			resume: sessionFile ? { sessionFile, originalTask: t.task } : undefined,
+		});
+	};
+
+	if (manifest.mode === "parallel" && plan.respawnTasks.length > 1) {
+		// Parallel: spawn + wait inside the same concurrency limit as fresh runs.
+		const drained = mapWithConcurrencyLimit(plan.respawnTasks, MAX_CONCURRENCY, async (t) => {
+			await respawn(t);
+			await waitForTask(t.taskId, { signal: init.signal });
+		});
+		if (init.wait) await drained;
+		else void drained.catch(() => {});
+	} else {
+		for (const t of plan.respawnTasks) void respawn(t);
+	}
+
+	if (manifest.mode === "chain") {
+		// The respawned current step must finish before fresh steps run.
+		const current = plan.respawnTasks[0];
+		if (current) {
+			void (async () => {
+				await waitForTask(current.taskId, { signal: init.signal });
+				runChainFrom(job, manifest.chain ?? [], plan.freshStartStep - 1, plan.previousOutput, init.agents, init.defaultCwd, init.modelCtx, init.signal);
+			})();
+		} else {
+			runChainFrom(job, manifest.chain ?? [], plan.freshStartStep - 1, plan.previousOutput, init.agents, init.defaultCwd, init.modelCtx, init.signal);
+		}
+	}
+
+	return { job, notes: notes.length ? notes : undefined };
+}
+
+// ── Job listings (registry ∪ disk) ─────────────────────────────────────────
+
+export interface JobListing {
+	id: string;
+	mode: JobMode;
+	jobStatus: string;
+	createdAt: number;
+	updatedAt: number;
+	resumable: boolean;
+	tasks: Array<{ taskId: string; name?: string; agent: string; status: string; step?: number }>;
+	source: "registry" | "disk";
+}
+
+/** Registry jobs + persisted jobs for the current parent session, deduped (registry wins). */
+export function listJobsForCurrentSession(): JobListing[] {
+	const root = getJobsRoot();
+	const psid = getParentSessionId();
+	const registry: JobListing[] = [...jobs.values()].map((j) => ({
+		id: j.id,
+		mode: j.mode,
+		jobStatus: j.finished ? j.status : "running",
+		createdAt: j.tasks.length > 0 ? Math.min(...j.tasks.map((t) => t.startedAt)) : Date.now(),
+		updatedAt: Date.now(),
+		resumable: j.tasks.some((t) => isResumableStatus(t.status)),
+		tasks: j.tasks.map((t) => ({ taskId: t.id, name: t.name, agent: t.agent, status: t.status, step: t.step })),
+		source: "registry" as const,
+	}));
+	const persisted: JobListing[] =
+		root && psid
+			? listJobManifests(root)
+					.filter((e) => e.parentSessionId === psid)
+					.map((e) => ({
+						id: e.jobId,
+						mode: e.manifest.mode,
+						jobStatus: e.manifest.status,
+						createdAt: e.manifest.createdAt,
+						updatedAt: e.manifest.updatedAt,
+						resumable: isResumableJob(e.manifest),
+						tasks: e.manifest.tasks.map((t) => ({
+							taskId: t.taskId, name: t.name, agent: t.agent, status: t.status, step: t.step,
+						})),
+						source: "disk" as const,
+					}))
+			: [];
+	return mergeJobListings(registry, persisted);
+}
+
+export function formatJobListings(list: JobListing[]): string {
+	if (list.length === 0) return "(no subagent jobs for this session)";
+	return list
+		.map((j) => {
+			const done = j.tasks.filter((t) => t.status === "completed").length;
+			const names = j.tasks.map((t) => `${t.agent}${t.name ? `/${t.name}` : ""}(${t.status})`).join(", ") || "(no tasks)";
+			return `- ${j.id} [${j.mode}] ${j.jobStatus} ${done}/${j.tasks.length} done${j.resumable ? " · resumable" : ""} · ${names} · source: ${j.source}`;
+		})
+		.join("\n");
+}
+
+export function hasPersistedJob(jobId: string): boolean {
+	const root = getJobsRoot();
+	const psid = getParentSessionId();
+	return Boolean(root && psid && readManifest(root, psid, jobId));
+}
+
+/** Map a persisted job's manifest tasks to TaskInfo-shaped rows for status rendering. */
+export function persistedTaskInfos(jobId: string): TaskInfo[] {
+	const root = getJobsRoot();
+	const psid = getParentSessionId();
+	const m = root && psid ? readManifest(root, psid, jobId) : undefined;
+	if (!m) return [];
+	return m.tasks.map((t) => ({
+		id: t.taskId,
+		agent: t.agent,
+		agentSource: "manifest",
+		task: t.task,
+		status: t.status,
+		exitCode: t.exitCode,
+		step: t.step,
+		name: t.name,
+		messages: t.finalOutput ? [{ role: "assistant", content: [{ type: "text", text: t.finalOutput }] }] : [],
+		usage: { ...emptyUsage(), ...t.usage },
+		model: t.model,
+		stopReason: t.stopReason,
+		errorMessage: t.errorMessage,
+		finishedAt: t.finishedAt,
+	}));
 }
