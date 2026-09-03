@@ -43,6 +43,8 @@ export interface Task {
 	stderr: string;
 	usage: UsageStats;
 	model?: string;
+	/** Child model's context window in tokens; undefined when unknown. */
+	contextWindow?: number;
 	tierUsed?: string;
 	tierNote?: string;
 	stopReason?: string;
@@ -79,6 +81,7 @@ export interface TaskInfo {
 	messages: MessageLike[];
 	usage: UsageStats;
 	model?: string;
+	contextWindow?: number;
 	tierUsed?: string;
 	tierNote?: string;
 	stopReason?: string;
@@ -172,6 +175,7 @@ export function toTaskInfo(t: Task): TaskInfo {
 		messages: t.messages,
 		usage: t.usage,
 		model: t.model,
+		contextWindow: t.contextWindow,
 		tierUsed: t.tierUsed,
 		tierNote: t.tierNote,
 		stopReason: t.stopReason,

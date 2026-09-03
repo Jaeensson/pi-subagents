@@ -85,16 +85,19 @@ visible text, tool calls, and in-progress tool output, rendered with the same
 native markdown as the main conversation: headings, lists, tables, and
 syntax-highlighted code blocks (thinking stays italic thinkingText):
 
-    ┌● watching: researcher · 1/2  3m 12s · claude-opus-4-5─────────┐
-    │Let me check where settings are read… (thinking, italic)     │
-    │→ grep pattern="modelTiers" in src/                          │
-    │└ pages… done, 1 hit                                         │
-    │● live   ↑↓ scroll · PgUp/PgDn · Tab agent · End tail · Esc close│
-    └─────────────────────────────────────────────────────────────┘
+┌● watching: researcher · 1/2  3m 12s · claude-opus-4-5 · ctx 3.0%/200k┐
+│Let me check where settings are read… (thinking, italic)            │
+│→ grep pattern="modelTiers" in src/                                 │
+│└ pages… done, 1 hit                                                │
+│● live   ↑↓ scroll · PgUp/PgDn · Tab agent · End tail · Esc close   │
+└────────────────────────────────────────────────────────────────────┘
 
 - `shift+ctrl+w` toggles the pane (TUI only). `↑↓` scroll the retained
   history, `PgUp`/`PgDn` page, `Tab` cycles running agents, `End` jumps back
   to the live tail, `Esc` (or the toggle key) closes.
+- The header shows the subagent's context usage (`ctx 3.0%/200k`, updated
+  live like pi's footer: warning above 70%, error above 90%). It is hidden
+  when the child model's context window is unknown.
 - Scrolling up **pins** the viewport: new tokens keep streaming below while
   the text you're reading stays put; the footer shows `↑ N above` while
   pinned. Scrolling down to the live edge (or `End`) resumes tailing.

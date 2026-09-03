@@ -16,6 +16,7 @@ import {
 	applyEventLine,
 	buildChildArgs,
 	getFinalOutput,
+	resolveContextWindow,
 	resolveModel,
 	type AgentSummary,
 } from "./core.ts";
@@ -131,6 +132,10 @@ export async function spawnTask(
 		defaultModel: options.modelCtx.defaultModel,
 		catalog: options.modelCtx.catalog,
 	});
+	const contextWindow = resolveContextWindow(
+		resolution.model ?? options.modelCtx.defaultModel,
+		options.modelCtx.catalog,
+	);
 	const task: Task = {
 		id: randomUUID(),
 		jobId,
@@ -146,6 +151,7 @@ export async function spawnTask(
 		stderr: "",
 		usage: emptyUsage(),
 		model: resolution.model,
+		contextWindow,
 		tierUsed: resolution.tierUsed,
 		tierNote: resolution.note,
 		step: options.step,

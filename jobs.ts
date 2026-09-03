@@ -73,7 +73,7 @@ export function buildModelContext(ctx: ExtensionContext): ModelContext {
 	const catalog: CatalogModel[] = ctx.modelRegistry
 		.getAvailable()
 		.filter((m) => scopedIds.size === 0 || scopedIds.has(m.id))
-		.map((m) => ({ id: m.id, provider: m.provider, inputCost: m.cost.input }));
+		.map((m) => ({ id: m.id, provider: m.provider, inputCost: m.cost.input, contextWindow: m.contextWindow }));
 	return {
 		tierConfig: settings.tierConfig,
 		defaultModel: settings.defaultModel ?? ctx.model?.id,

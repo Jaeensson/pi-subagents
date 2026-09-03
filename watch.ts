@@ -39,6 +39,7 @@ import {
 	type LiveTrace,
 } from "./live.ts";
 import {
+	formatContextUsage,
 	formatElapsed,
 	formatModelTag,
 	frameWatchPane,
@@ -332,8 +333,12 @@ function buildHeader(task: Task | null, running: Task[], state: WatchState, them
 	const sel = pos >= 0 && running.length > 0 ? theme.fg("accent", `${pos + 1}/${running.length}`) : "";
 	const elapsed = task?.status === "running" ? theme.fg("dim", formatElapsed((Date.now() - task.startedAt) / 1000)) : "";
 	const model = task ? theme.fg("dim", formatModelTag(task.model)) : "";
+	const ctx = formatContextUsage(task?.usage.contextTokens ?? 0, task?.contextWindow);
+	const pct = task?.contextWindow ? ((task.usage.contextTokens / task.contextWindow) * 100) : 0;
+	const ctxColor = pct > 90 ? "error" : pct > 70 ? "warning" : "dim";
+	const ctxSeg = ctx ? theme.fg(ctxColor, `ctx ${ctx}`) : "";
 	const status = task?.status === "running" ? theme.fg("warning", "● watching") : theme.fg("success", "✓ done");
-	const meta = [label, sel, elapsed, model].filter(Boolean).join(theme.fg("dim", " · "));
+	const meta = [label, sel, elapsed, model, ctxSeg].filter(Boolean).join(theme.fg("dim", " · "));
 	return `${status}  ${meta}`;
 }
 

@@ -23,6 +23,7 @@ import {
 	formatStatusReport,
 	frameWatchPane,
 	watchPaneContentWidth,
+	formatContextUsage,
 	formatElapsed,
 	formatModelTag,
 	formatTokens,
@@ -38,6 +39,7 @@ import {
 	pickAutoTier,
 	planAgentSeeds,
 	resolveAgent,
+	resolveContextWindow,
 	resolveModel,
 	shouldNotify,
 	truncateOutput,
@@ -632,6 +634,60 @@ test("formatUsageStats appends the tier to the model when given", () => {
 	assert.ok(formatUsageStats({ turns: 1 }, "claude-opus-4-5", "deep").includes("claude-opus-4-5 (tier: deep)"));
 	assert.ok(formatUsageStats({ turns: 1 }, "claude-opus-4-5").includes("claude-opus-4-5"));
 	assert.equal(formatUsageStats({ turns: 1 }, undefined, "deep"), "1 turn");
+});
+
+// ── formatContextUsage / resolveContextWindow ────────────────────────────────
+
+test("formatContextUsage renders percent over window like pi's footer", () => {
+	assert.equal(formatContextUsage(30000, 1000000), "3.0%/1.0M");
+	assert.equal(formatContextUsage(125000, 200000), "62.5%/200k");
+});
+
+test("formatContextUsage shows 0.0% before the first response", () => {
+	assert.equal(formatContextUsage(0, 1000000), "0.0%/1.0M");
+});
+
+test("formatContextUsage keeps percentages above 100 unclamped", () => {
+	assert.equal(formatContextUsage(1050000, 1000000), "105.0%/1.0M");
+});
+
+test("formatContextUsage returns nothing when the context window is unknown", () => {
+	assert.equal(formatContextUsage(30000, undefined), undefined);
+	assert.equal(formatContextUsage(30000, 0), undefined);
+});
+
+test("resolveContextWindow finds models by bare id and qualified id", () => {
+	const catalog = [
+		{ id: "claude-sonnet-4-5", provider: "anthropic", inputCost: 3, contextWindow: 200000 },
+		{ id: "gpt-5.6", provider: "openai", inputCost: 2, contextWindow: 400000 },
+	];
+	assert.equal(resolveContextWindow("claude-sonnet-4-5", catalog), 200000);
+	assert.equal(resolveContextWindow("openai/gpt-5.6", catalog), 400000);
+});
+
+test("resolveContextWindow returns nothing for unknown models", () => {
+	const catalog = [{ id: "claude-sonnet-4-5", provider: "anthropic", inputCost: 3, contextWindow: 200000 }];
+	assert.equal(resolveContextWindow("gpt-5.6", catalog), undefined);
+	assert.equal(resolveContextWindow(undefined, catalog), undefined);
+	assert.equal(resolveContextWindow("mistral/claude-sonnet-4-5", catalog), undefined);
+});
+
+test("resolveContextWindow treats missing or zero windows as unknown", () => {
+	const catalog = [
+		{ id: "local-model", provider: "ollama", inputCost: 0 },
+		{ id: "legacy-model", provider: "old", inputCost: 0, contextWindow: 0 },
+	];
+	assert.equal(resolveContextWindow("local-model", catalog), undefined);
+	assert.equal(resolveContextWindow("legacy-model", catalog), undefined);
+});
+
+test("resolveContextWindow prefers the qualified match over an unqualified duplicate", () => {
+	const catalog = [
+		{ id: "same-id", provider: "a", inputCost: 1, contextWindow: 100000 },
+		{ id: "same-id", provider: "b", inputCost: 1, contextWindow: 200000 },
+	];
+	assert.equal(resolveContextWindow("b/same-id", catalog), 200000);
+	assert.equal(resolveContextWindow("same-id", catalog), 100000);
 });
 
 // ── formatElapsed ─────────────────────────────────────────────────────────────

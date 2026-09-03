@@ -147,6 +147,8 @@ export interface CatalogModel {
 	id: string;
 	provider: string;
 	inputCost: number;
+	/** Context window in tokens; absent or <= 0 means unknown. */
+	contextWindow?: number;
 }
 
 export interface ModelResolution {
@@ -239,6 +241,26 @@ export function pickAutoTier(
 		.sort((a, b) => b.inputCost - a.inputCost || a.id.length - b.id.length);
 	if (pricier.length > 0) return { model: qualified(pricier[0]) };
 	return { model: qualified(def), collapsed: true };
+}
+
+/**
+ * Look up a catalog model's context window by model string. Accepts bare ids
+ * (`claude-sonnet-4-5`) and provider-qualified ids (`anthropic/claude-...`).
+ * Returns undefined when the model or its window is unknown — callers must
+ * not fall back to absolute-token display.
+ */
+export function resolveContextWindow(
+	model: string | undefined,
+	catalog: CatalogModel[],
+): number | undefined {
+	if (!model) return undefined;
+	const slash = model.indexOf("/");
+	const entry =
+		slash > 0
+			? catalog.find((m) => m.provider === model.slice(0, slash) && m.id === model.slice(slash + 1))
+			: catalog.find((m) => m.id === model);
+	const window = entry?.contextWindow;
+	return window && window > 0 ? window : undefined;
 }
 
 /**
@@ -526,6 +548,20 @@ export function formatTokens(count: number): string {
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	return `${(count / 1000000).toFixed(1)}M`;
+}
+
+/**
+ * Format context usage like pi's footer (`3.0%/1.0M`), unclamped above 100%.
+ * Returns undefined when the context window is unknown — no absolute-token
+ * fallback; callers hide the segment entirely in that case.
+ */
+export function formatContextUsage(
+	contextTokens: number,
+	contextWindow: number | undefined,
+): string | undefined {
+	if (!contextWindow || contextWindow <= 0) return undefined;
+	const percent = ((contextTokens / contextWindow) * 100).toFixed(1);
+	return `${percent}%/${formatTokens(contextWindow)}`;
 }
 
 export function formatElapsed(seconds: number): string {
