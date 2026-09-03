@@ -33,6 +33,12 @@ import {
 	getFinalOutput,
 	getResultOutput,
 	isFailedState,
+	isResumableStatus,
+	RESUMABLE_STATUSES,
+	statusIcon,
+	slugifyName,
+	deriveTaskName,
+	continuationPrompt,
 	normalizeTierConfig,
 	isTierLevel,
 	parseAgentMarkdown,
@@ -1084,4 +1090,94 @@ test("bundled agent prompts reference only tools and concepts this project provi
 	for (const tool of ["web_search", "web_fetch", "web_crawl"]) {
 		assert.ok(researcher?.tools?.includes(tool), `researcher must include ${tool}`);
 	}
+});
+
+// ── Named sessions & resumability ────────────────────────────────────────────
+
+test("slugifyName lowercases, strips invalid chars, caps length", () => {
+	assert.equal(slugifyName("Feature 1 Implementation!"), "feature-1-implementation");
+	assert.equal(slugifyName("  --Weird___Name--  "), "weird-name");
+	assert.equal(slugifyName("x".repeat(50)).length, 32);
+	assert.equal(slugifyName("x".repeat(50), 8).length, 8);
+	assert.equal(slugifyName("!!! --- !!!"), undefined);
+	assert.equal(slugifyName(""), undefined);
+});
+
+test("deriveTaskName prefers the explicit name and falls back to task slug + id suffix", () => {
+	assert.equal(deriveTaskName("My Task!", "whatever", "abcd-1234"), "my-task");
+	const fallback = deriveTaskName(undefined, "Fix the auth loop in middleware", "3f2a7b9c-1234");
+	assert.equal(fallback, "fix-the-auth-loop-in-middleware-3f2a");
+	assert.equal(deriveTaskName(undefined, "!!!", "3f2a7b9c"), "3f2a");
+	assert.equal(deriveTaskName(undefined, "!!!", "----"), undefined);
+});
+
+test("continuationPrompt embeds the original task", () => {
+	const p = continuationPrompt("Do the thing");
+	assert.match(p, /^CONTINUATION:/);
+	assert.match(p, /transcript has been restored/);
+	assert.match(p, /Original task: Do the thing$/);
+});
+
+test("resumable statuses are exactly paused, interrupted, aborted", () => {
+	assert.deepEqual([...RESUMABLE_STATUSES], ["paused", "interrupted", "aborted"]);
+	assert.equal(isResumableStatus("paused"), true);
+	assert.equal(isResumableStatus("interrupted"), true);
+	assert.equal(isResumableStatus("aborted"), true);
+	assert.equal(isResumableStatus("completed"), false);
+	assert.equal(isResumableStatus("running"), false);
+	assert.equal(isResumableStatus("failed"), false);
+	assert.equal(isResumableStatus(undefined), false);
+});
+
+test("isFailedState treats paused and interrupted as not failed; still fails aborted without status", () => {
+	assert.equal(isFailedState({ exitCode: 1, stopReason: "aborted", status: "paused" }), false);
+	assert.equal(isFailedState({ exitCode: 1, stopReason: "aborted", status: "interrupted" }), false);
+	assert.equal(isFailedState({ exitCode: 1, stopReason: "aborted" }), true);
+	assert.equal(isFailedState({ exitCode: 0, status: "completed" }), false);
+	assert.equal(isFailedState({ exitCode: 1, stopReason: "error", status: "failed" }), true);
+});
+
+test("statusIcon maps each status", () => {
+	assert.equal(statusIcon("running"), "⏳");
+	assert.equal(statusIcon("completed"), "✓");
+	assert.equal(statusIcon("paused"), "⏸");
+	assert.equal(statusIcon("interrupted"), "⚠");
+	assert.equal(statusIcon("failed"), "✗");
+	assert.equal(statusIcon("aborted"), "✗");
+});
+
+test("buildChildArgs emits session-dir/id for fresh durable tasks and drops --no-session", () => {
+	const args = buildChildArgs({
+		task: "T",
+		sessionDir: "/store/j1/tasks",
+		sessionId: "tid-1",
+	});
+	assert.ok(args.includes("--session-dir"));
+	assert.ok(args.includes("/store/j1/tasks"));
+	assert.ok(args.includes("--session-id"));
+	assert.ok(args.includes("tid-1"));
+	assert.ok(!args.includes("--no-session"));
+	assert.equal(args.indexOf("--session-dir"), 3); // right after --mode json -p
+});
+
+test("buildChildArgs resumes via --session file", () => {
+	const args = buildChildArgs({
+		task: "T",
+		resumeSessionFile: "/store/j1/tasks/12_tid-1.jsonl",
+	});
+	assert.ok(args.includes("--session"));
+	assert.ok(args.includes("/store/j1/tasks/12_tid-1.jsonl"));
+	assert.ok(!args.includes("--no-session"));
+	assert.ok(!args.includes("--session-id"));
+});
+
+test("formatStatusReport shows name and paused/interrupted icons", () => {
+	const mk = (over) => ({
+		id: "t1", agent: "worker", name: "feat-1", status: "running", task: "T",
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+		messages: [], exitCode: -1, ...over,
+	});
+	const text = formatStatusReport([mk({ status: "paused" }), mk({ id: "t2", name: undefined, status: "interrupted" })]);
+	assert.match(text, /\[worker\/feat-1\].*⏸/s);
+	assert.match(text, /\[worker\].*⚠/s);
 });

@@ -418,16 +418,21 @@ export function buildChildArgs(options: {
 	extensions?: string[];
 	systemPromptFile?: string;
 	task: string;
+	sessionDir?: string;
+	sessionId?: string;
+	resumeSessionFile?: string;
 }): string[] {
-	const args = [
-		"--mode",
-		"json",
-		"-p",
-		"--no-session",
-		"--no-extensions",
-		"--no-skills",
-		"--no-prompt-templates",
-	];
+	const args = ["--mode", "json", "-p"];
+	// Durable session selection: resume an existing transcript, create a named
+	// one in the store, or stay ephemeral (legacy/tests).
+	if (options.resumeSessionFile) {
+		args.push("--session", options.resumeSessionFile);
+	} else if (options.sessionDir && options.sessionId) {
+		args.push("--session-dir", options.sessionDir, "--session-id", options.sessionId);
+	} else {
+		args.push("--no-session");
+	}
+	args.push("--no-extensions", "--no-skills", "--no-prompt-templates");
 	// Explicit -e flags still load with --no-extensions (no auto-discovery,
 	// no recursion risk); only agent-declared extensions are passed.
 	if (options.extensions && options.extensions.length > 0) {
@@ -489,8 +494,52 @@ export function getFinalOutput(messages: MessageLike[]): string {
 	return "";
 }
 
-export function isFailedState(state: { exitCode: number; stopReason?: string }): boolean {
+export function isFailedState(state: { exitCode: number; stopReason?: string; status?: string }): boolean {
+	if (state.status === "paused" || state.status === "interrupted") return false;
 	return state.exitCode !== 0 || state.stopReason === "error" || state.stopReason === "aborted";
+}
+
+// ── Named sessions & resumability ────────────────────────────────────────────
+
+/** Resumable task statuses: only `completed` (and `failed`) are not resumable. */
+export const RESUMABLE_STATUSES: readonly string[] = ["paused", "interrupted", "aborted"];
+
+export function isResumableStatus(status: string | undefined): boolean {
+	return status !== undefined && RESUMABLE_STATUSES.includes(status);
+}
+
+/** Lowercase `[a-z0-9-]`, ≤ maxLen; undefined when nothing survives. */
+export function slugifyName(input: string, maxLen: number = 32): string | undefined {
+	const slug = input
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, maxLen)
+		.replace(/-+$/g, "");
+	return slug || undefined;
+}
+
+/** Explicit name slug, else task-slug + 4-char id suffix; undefined when nothing survives. */
+export function deriveTaskName(name: string | undefined, task: string, taskId: string): string | undefined {
+	const explicit = slugifyName(name ?? "");
+	if (explicit) return explicit;
+	const suffix = taskId.replace(/[^a-z0-9]/gi, "").slice(0, 4).toLowerCase();
+	if (!suffix) return undefined;
+	// Truncate the task slug to leave room for the `-<suffix>` id disambiguator.
+	const base = slugifyName(task, 32 - suffix.length - 1);
+	return base ? `${base}-${suffix}` : suffix;
+}
+
+export function continuationPrompt(task: string): string {
+	return `CONTINUATION: Your previous run of this task was interrupted; your session transcript has been restored. Continue where you left off and complete the task.\n\nOriginal task: ${task}`;
+}
+
+export function statusIcon(status: string): string {
+	if (status === "running") return "⏳";
+	if (status === "completed") return "✓";
+	if (status === "paused") return "⏸";
+	if (status === "interrupted") return "⚠";
+	return "✗";
 }
 
 export function getResultOutput(result: {
@@ -675,20 +724,22 @@ export function completionHeader(summary: {
 export function formatCompletionNotification(
 	tasks: Array<{
 		agent: string;
-		status: "completed" | "failed" | "aborted";
+		name?: string;
+		status: "completed" | "failed" | "aborted" | "paused" | "interrupted";
 		output: string;
 		errorMessage?: string;
 	}>,
 	taskIds: string[],
 ): string {
+	const label = (t: { agent: string; name?: string }) => `[${t.agent}${t.name ? `/${t.name}` : ""}]`;
 	const lines = tasks.map((t) => {
 		const icon = t.status === "completed" ? "✓" : "✗";
 		if (t.status === "completed") {
 			const preview = previewLine(t.output || "(no output)");
-			return `- ${icon} [${t.agent}] ${preview}`;
+			return `- ${icon} ${label(t)} ${preview}`;
 		}
-		const reason = previewLine(t.errorMessage || "(no error message)");
-		return `- ${icon} [${t.agent}] ${t.status}: ${reason}`;
+		const reason = previewLine(t.errorMessage || `(no error message; status: ${t.status})`);
+		return `- ${icon} ${label(t)} ${t.status}: ${reason}`;
 	});
 
 	return [
@@ -704,7 +755,8 @@ export function formatStatusReport(
 	tasks: Array<{
 		id: string;
 		agent: string;
-		status: "running" | "completed" | "failed" | "aborted";
+		name?: string;
+		status: "running" | "completed" | "failed" | "aborted" | "paused" | "interrupted";
 		task: string;
 		exitCode?: number;
 		messages: MessageLike[];
@@ -718,9 +770,11 @@ export function formatStatusReport(
 ): string {
 	const maxOutputBytes = opts.maxOutputBytes ?? 4000;
 	const sections = tasks.map((t) => {
-		const icon =
-			t.status === "running" ? "⏳" : t.status === "completed" ? "✓" : "✗";
-		const lines = [`### [${t.agent}] ${icon} ${t.status} — id: ${t.id}`, `Task: ${t.task}`];
+		const icon = statusIcon(t.status);
+		const lines = [
+			`### [${t.agent}${t.name ? `/${t.name}` : ""}] ${icon} ${t.status} — id: ${t.id}`,
+			`Task: ${t.task}`,
+		];
 		if (t.status === "running") {
 			lines.push("(running, no output yet)");
 		} else {
