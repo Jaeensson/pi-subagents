@@ -15,6 +15,8 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import {
 	applyEventLine,
 	buildChildArgs,
+	continuationPrompt,
+	deriveTaskName,
 	getFinalOutput,
 	resolveContextWindow,
 	resolveModel,
@@ -26,15 +28,18 @@ import {
 	decRunningCount,
 	emptyUsage,
 	fireWaiters,
+	getJobsRoot,
 	incRunningCount,
 	jobDetails,
 	jobs,
 	taskWaiters,
 	tasks,
 	waitForJob,
+	type Job,
 	type ModelContext,
 	type Task,
 } from "./runtime.ts";
+import { resolveSessionFile, taskSessionDir, toManifestTask, updateManifest, upsertManifestTask } from "./store.ts";
 import { updateStatusWidget } from "./tui.ts";
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -79,8 +84,16 @@ function cleanupTaskTemp(task: Task) {
 function finalizeTask(task: Task, code: number | null) {
 	if (task.status !== "running") return;
 	task.exitCode = code ?? 1;
+	task.finishedAt = Date.now();
 	const sr = task.stopReason;
-	task.status = code === 0 && sr !== "error" && sr !== "aborted" ? "completed" : sr === "aborted" ? "aborted" : "failed";
+	const pauseIntended = task.pauseRequested === true;
+	task.status = pauseIntended
+		? "paused"
+		: code === 0 && sr !== "error" && sr !== "aborted"
+			? "completed"
+			: sr === "aborted"
+				? "aborted"
+				: "failed";
 	cleanupTaskTemp(task);
 	decRunningCount();
 	updateStatusWidget();
@@ -88,7 +101,7 @@ function finalizeTask(task: Task, code: number | null) {
 
 	const job = jobs.get(task.jobId);
 	if (job) {
-		if (task.status !== "completed" && job.status === "running") job.status = "failed";
+		if (task.status !== "completed" && task.status !== "paused" && job.status === "running") job.status = "failed";
 		job.emit?.(
 			job.mode === "parallel"
 				? `Parallel: ${job.tasks.filter((t) => t.status !== "running").length}/${job.tasks.length} done...`
@@ -96,6 +109,19 @@ function finalizeTask(task: Task, code: number | null) {
 			jobDetails(job),
 		);
 		checkJobComplete(job);
+	}
+
+	// Durable record: resolve the session file (the child may have created it
+	// after our spawn-time flush) and write the final task entry.
+	const root = getJobsRoot();
+	const psid = job?.parentSessionId;
+	if (root && psid) {
+		if (!task.sessionFile && task.sessionDir) task.sessionFile = resolveSessionFile(task.sessionDir, task.id);
+		void updateManifest(root, psid, task.jobId, (m) => {
+			upsertManifestTask(m, toManifestTask(task));
+		}).catch(() => {
+			/* best-effort */
+		});
 	}
 }
 
@@ -123,17 +149,19 @@ export async function spawnTask(
 	taskText: string,
 	cwd: string,
 	jobId: string,
-	options: { step?: number; tier?: string; modelCtx: ModelContext },
+	options: { step?: number; tier?: string; name?: string; modelOverride?: string; resume?: { sessionFile?: string; originalTask: string }; modelCtx: ModelContext },
 ): Promise<Task> {
 	const resolution = resolveModel({
-		callTier: options.tier,
-		agentTier: agent.tier,
+		callTier: options.modelOverride ? undefined : options.tier,
+		agentTier: options.modelOverride ? undefined : agent.tier,
 		tierConfig: options.modelCtx.tierConfig,
 		defaultModel: options.modelCtx.defaultModel,
 		catalog: options.modelCtx.catalog,
 	});
+	// A resume is pinned to the model recorded in its manifest.
+	const effectiveModel = options.modelOverride ?? resolution.model;
 	const contextWindow = resolveContextWindow(
-		resolution.model ?? options.modelCtx.defaultModel,
+		effectiveModel ?? options.modelCtx.defaultModel,
 		options.modelCtx.catalog,
 	);
 	const task: Task = {
@@ -150,7 +178,7 @@ export async function spawnTask(
 		live: emptyLiveTrace(),
 		stderr: "",
 		usage: emptyUsage(),
-		model: resolution.model,
+		model: effectiveModel,
 		contextWindow,
 		tierUsed: resolution.tierUsed,
 		tierNote: resolution.note,
@@ -163,6 +191,22 @@ export async function spawnTask(
 	incRunningCount();
 	updateStatusWidget();
 
+	// Durable session setup: the manifest entry is flushed BEFORE the child
+	// spawns (write-ordering invariant), so a session file can never exist
+	// without its manifest entry.
+	const root = getJobsRoot();
+	const psid = job?.parentSessionId;
+	const sessionDir = root && psid ? taskSessionDir(root, psid, jobId) : undefined;
+	if (sessionDir) {
+		task.sessionDir = sessionDir;
+		task.name = deriveTaskName(options.name, taskText, task.id);
+		void updateManifest(root!, psid!, jobId, (m) => {
+			upsertManifestTask(m, toManifestTask(task));
+		}).catch(() => {
+			/* best-effort */
+		});
+	}
+
 	try {
 		let systemPromptFile: string | undefined;
 		if (agent.systemPrompt.trim()) {
@@ -172,12 +216,16 @@ export async function spawnTask(
 			systemPromptFile = tmp.filePath;
 		}
 
+		const effectiveTask = options.resume ? continuationPrompt(options.resume.originalTask) : taskText;
 		const args = buildChildArgs({
-			model: resolution.model,
+			model: effectiveModel,
 			tools: agent.tools,
 			extensions: agent.extensions,
 			systemPromptFile,
-			task: taskText,
+			task: effectiveTask,
+			sessionDir,
+			sessionId: task.id,
+			resumeSessionFile: options.resume?.sessionFile,
 		});
 		const invocation = getPiInvocation(args);
 		const proc = spawn(invocation.command, invocation.args, {
@@ -224,4 +272,47 @@ export async function waitForJobOrKill(jobId: string, signal?: AbortSignal, time
 	for (const t of job.tasks) if (t.status === "running") killTask(t);
 	await waitForJob(jobId, {});
 	return false;
+}
+
+// ── Pause & durable shutdown ─────────────────────────────────────────────────
+
+/** Graceful pause: flag + SIGTERM; finalize marks affected tasks `paused`. */
+export function pauseJobTasks(job: Job): Task[] {
+	const affected = job.tasks.filter((t) => t.status === "running");
+	for (const t of affected) {
+		t.pauseRequested = true;
+		killTask(t);
+	}
+	return affected;
+}
+
+/**
+ * Shutdown sweep: mark every non-terminal task `interrupted` and flush its
+ * manifest entry, then the job as `interrupted`. Called by index.ts BEFORE the
+ * kill sweep — finalizeTask's `status !== "running"` guard makes the later
+ * child-exit events no-ops, so the interrupted record survives. Paused tasks
+ * keep their status (they are already finalized) and are re-flushed so
+ * `sessionFile`/`finalOutput` are current.
+ */
+export async function markInterruptedSweep(): Promise<void> {
+	const root = getJobsRoot();
+	for (const t of tasks.values()) {
+		if (t.status !== "running" && t.status !== "paused") continue;
+		if (t.status === "running") {
+			t.status = "interrupted";
+			t.finishedAt = Date.now();
+		}
+		if (!root) continue;
+		const psid = jobs.get(t.jobId)?.parentSessionId;
+		if (!psid) continue;
+		if (!t.sessionFile && t.sessionDir) t.sessionFile = resolveSessionFile(t.sessionDir, t.id);
+		try {
+			await updateManifest(root, psid, t.jobId, (m) => {
+				upsertManifestTask(m, toManifestTask(t));
+				m.status = "interrupted";
+			});
+		} catch {
+			/* best-effort */
+		}
+	}
 }

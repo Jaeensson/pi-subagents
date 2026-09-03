@@ -23,6 +23,7 @@ import {
 	type TierConfig,
 } from "./core.ts";
 import { killTask, spawnTask } from "./process.ts";
+import { MANIFEST_VERSION, upsertManifestTask, toManifestTask, updateManifest, writeManifest, type ManifestChainStep } from "./store.ts";
 import {
 	checkJobComplete,
 	jobs,
@@ -37,7 +38,7 @@ import {
 // ── Model tier context ───────────────────────────────────────────────────────
 
 /** Read `subagent.modelTiers` and `defaultModel` from the user's settings.json. */
-function readSettingsFile(): { tierConfig?: TierConfig; defaultModel?: string } {
+function readSettingsFile(): { tierConfig?: TierConfig; defaultModel?: string; jobRetentionDays?: number } {
 	let raw: string;
 	try {
 		raw = fs.readFileSync(path.join(getAgentDir(), "settings.json"), "utf-8");
@@ -53,17 +54,32 @@ function readSettingsFile(): { tierConfig?: TierConfig; defaultModel?: string } 
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
 	const settings = parsed as Record<string, unknown>;
 	const subagent = settings.subagent;
-	const modelTiers =
-		subagent && typeof subagent === "object" && !Array.isArray(subagent)
-			? (subagent as Record<string, unknown>).modelTiers
-			: undefined;
+	const subagentObj = subagent && typeof subagent === "object" && !Array.isArray(subagent)
+		? (subagent as Record<string, unknown>)
+		: undefined;
+	const modelTiers = subagentObj?.modelTiers;
+	const rawRetention = subagentObj?.jobRetentionDays;
 	return {
 		tierConfig: normalizeTierConfig(modelTiers),
 		defaultModel:
 			typeof settings.defaultModel === "string" && settings.defaultModel.trim() !== ""
 				? settings.defaultModel
 				: undefined,
+		jobRetentionDays:
+			typeof rawRetention === "number" && Number.isFinite(rawRetention) && rawRetention >= 0
+				? Math.floor(rawRetention)
+				: undefined,
 	};
+}
+
+/** `subagent.jobRetentionDays` (days before finished/interrupted jobs are GC'd). Default 7; 0 = never delete. */
+export function readJobRetentionDays(): number {
+	return readSettingsFile().jobRetentionDays ?? 7;
+}
+
+/** Root of the durable job store: `~/.pi/agent/subagent-jobs`. */
+export function getDefaultJobsRoot(): string {
+	return path.join(getAgentDir(), "subagent-jobs");
 }
 
 /** Build the model context for one tool call from the extension context. */
@@ -88,6 +104,7 @@ export function createJob(
 	notifyOnComplete: boolean,
 	emit?: (content: string, details: ToolDetails) => void,
 	chainTotal?: number,
+	persist?: { parentSessionId: string; chain?: ManifestChainStep[] },
 ): Job {
 	const job: Job = {
 		id: randomUUID(),
@@ -101,16 +118,59 @@ export function createJob(
 		chainRunnerDone: false,
 		pendingSpawns: 0,
 		emit,
+		parentSessionId: persist?.parentSessionId,
 	};
 	jobs.set(job.id, job);
+	if (persist) {
+		// Write-ordering invariant: the manifest exists before any child spawns.
+		const manifest = {
+			version: MANIFEST_VERSION,
+			jobId: job.id,
+			parentSessionId: persist.parentSessionId,
+			mode,
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			notifyOnComplete,
+			status: "running" as const,
+			...(chainTotal !== undefined ? { chainTotal } : {}),
+			...(persist.chain ? { chain: persist.chain } : {}),
+			tasks: [],
+		};
+		void writeManifest(getDefaultJobsRoot(), persist.parentSessionId, manifest).catch(() => {
+			/* best-effort: store problems never break spawning */
+		});
+	}
 	return job;
+}
+
+/** Append/update one task entry in a job's manifest (best-effort). */
+export function flushManifestTask(parentSessionId: string, jobId: string, task: Parameters<typeof toManifestTask>[0]): void {
+	void updateManifest(getDefaultJobsRoot(), parentSessionId, jobId, (m) => {
+		upsertManifestTask(m, toManifestTask(task));
+	}).catch(() => {
+		/* best-effort */
+	});
 }
 
 // ── Chain runner ─────────────────────────────────────────────────────────────
 
 export function runChain(
 	job: Job,
-	chain: Array<{ agent?: string; task: string; cwd?: string; tier?: string }>,
+	chain: Array<{ agent?: string; task: string; cwd?: string; tier?: string; name?: string }>,
+	agents: AgentSummary[],
+	defaultCwd: string,
+	modelCtx: ModelContext,
+	signal?: AbortSignal,
+) {
+	runChainFrom(job, chain, 0, "", agents, defaultCwd, modelCtx, signal);
+}
+
+/** Chain runner core: starts at `startIndex` (0-based) with `initialPrevious` for `{previous}`. */
+export function runChainFrom(
+	job: Job,
+	chain: Array<{ agent?: string; task: string; cwd?: string; tier?: string; name?: string }>,
+	startIndex: number,
+	initialPrevious: string,
 	agents: AgentSummary[],
 	defaultCwd: string,
 	modelCtx: ModelContext,
@@ -118,8 +178,8 @@ export function runChain(
 ) {
 	// Kick off without awaiting — the job's completion drives callers.
 	void (async () => {
-		let previousOutput = "";
-		for (let i = 0; i < chain.length; i++) {
+		let previousOutput = initialPrevious;
+		for (let i = startIndex; i < chain.length; i++) {
 			const step = chain[i];
 			const agent = resolveAgent(step.agent, agents);
 			if (!agent) {
@@ -130,6 +190,7 @@ export function runChain(
 			const task = await spawnTask(agent, step.task.replace(/\{previous\}/g, previousOutput), step.cwd ?? defaultCwd, job.id, {
 				step: i + 1,
 				tier: step.tier,
+				name: step.name,
 				modelCtx,
 			});
 			const completed = await waitForTask(task.id, { signal });
