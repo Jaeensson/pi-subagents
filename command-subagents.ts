@@ -32,6 +32,8 @@ import {
 	fuzzyFilter,
 	getKeybindings,
 	Input,
+	Key,
+	matchesKey,
 	type SelectItem,
 	SelectList,
 	type SettingItem,
@@ -100,17 +102,14 @@ function catalogOptions(ctx: ExtensionCommandContext): ModelOption[] {
 // ── Model picker submenu ─────────────────────────────────────────────────────
 
 const PICKER_VISIBLE_ROWS = 8;
-/** ctrl+l — clear the tier mapping and close the picker (works on macOS too;
- * alt/option keys produce composed characters there). alt+c kept as an alias
- * for terminals with meta-key mode enabled. */
-const CTRL_L = "\x0c";
-const ALT_C = "\x1bc";
+/** ctrl+alt+l — clear the highlighted tier's model from the main menu. */
+const CLEAR_TIER = Key.ctrlAlt("l");
 
 /**
  * Search-driven model picker: type to fuzzy-filter the catalog, arrows to
- * navigate (SelectList scrolls), enter to select, alt+c to clear the tier
- * back to auto, esc to cancel. `onDone("auto")` clears, `onDone(id)` sets,
- * `onDone()` cancels without changes.
+ * navigate (SelectList scrolls), enter to select, esc to cancel. Clearing
+ * lives in the main menu (ctrl+alt+l on the highlighted tier row).
+ * `onDone(id)` sets, `onDone()` cancels without changes.
  */
 class ModelPickerComponent extends Container {
 	private readonly tui: TUI;
@@ -139,7 +138,7 @@ class ModelPickerComponent extends Container {
 		this.addChild(this.input);
 		this.addChild(this.listHost);
 		this.addChild(new Text(
-			theme.fg("dim", "type to search · ↑↓ navigate · enter select · ctrl+l clear · esc cancel"),
+			theme.fg("dim", "type to search · ↑↓ navigate · enter select · esc back"),
 			1,
 			0,
 		));
@@ -166,10 +165,6 @@ class ModelPickerComponent extends Container {
 
 	handleInput(data: string): void {
 		const kb = getKeybindings();
-		if (data === CTRL_L || data === ALT_C || data === "\x1bC") {
-			this.onDone("auto");
-			return;
-		}
 		if (kb.matches(data, "tui.select.cancel")) {
 			this.onDone();
 			return;
@@ -204,6 +199,10 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 		const tui = _tui;
 		const container = new Container();
 		const listHost = new Container();
+		// Mirror of the SettingsList highlight (its selectedIndex is private);
+		// kept in sync by intercepting up/down with the same wrap semantics.
+		let selectedIndex = 0;
+		const itemCount = () => (config?.auto === true ? 1 : 1 + TIER_LEVELS.length);
 
 		const buildSettingsList = () => {
 			const autoOn = config?.auto === true;
@@ -241,6 +240,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 				config = next;
 				// Toggling auto adds/removes the tier rows — rebuild the menu.
 				if (id === AUTO_ID) {
+					selectedIndex = Math.min(selectedIndex, itemCount() - 1);
 					listHost.clear();
 					listHost.addChild(buildSettingsList());
 				}
@@ -250,6 +250,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 
 		container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
 		container.addChild(new Text(theme.fg("accent", theme.bold("Subagent model tiers (saved to settings.json)")), 1, 0));
+		container.addChild(new Text(theme.fg("dim", "ctrl+alt+l: clear the highlighted tier's model"), 1, 0));
 		listHost.addChild(buildSettingsList());
 		container.addChild(listHost);
 		container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
@@ -258,6 +259,31 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 			render: (width: number) => container.render(width),
 			invalidate: () => container.invalidate(),
 			handleInput: (data: string) => {
+				if (matchesKey(data, CLEAR_TIER)) {
+					const level = selectedIndex > 0 && config?.auto !== true ? TIER_LEVELS[selectedIndex - 1] : undefined;
+					if (!level) {
+						ui.notify("Highlight a tier row (fast/balanced/deep) to clear it.", "info");
+					} else {
+						const next = applyChange(config, { kind: "tier", level, model: undefined }, ui);
+						if (next === null) {
+							done(true);
+							return;
+						}
+						config = next;
+						// Refresh the row so the tier shows "auto" again.
+						listHost.clear();
+						listHost.addChild(buildSettingsList());
+					}
+					tui.requestRender();
+					return;
+				}
+				// Track the highlight so ctrl+alt+l knows which tier to clear.
+				const kb = getKeybindings();
+				if (kb.matches(data, "tui.select.up")) {
+					selectedIndex = selectedIndex === 0 ? itemCount() - 1 : selectedIndex - 1;
+				} else if (kb.matches(data, "tui.select.down")) {
+					selectedIndex = selectedIndex === itemCount() - 1 ? 0 : selectedIndex + 1;
+				}
 				listHost.children[0]?.handleInput?.(data);
 				tui.requestRender();
 			},
