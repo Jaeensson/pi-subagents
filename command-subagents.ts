@@ -100,7 +100,10 @@ function catalogOptions(ctx: ExtensionCommandContext): ModelOption[] {
 // ── Model picker submenu ─────────────────────────────────────────────────────
 
 const PICKER_VISIBLE_ROWS = 8;
-/** alt+c — clear the tier mapping and close the picker. */
+/** ctrl+l — clear the tier mapping and close the picker (works on macOS too;
+ * alt/option keys produce composed characters there). alt+c kept as an alias
+ * for terminals with meta-key mode enabled. */
+const CTRL_L = "\x0c";
 const ALT_C = "\x1bc";
 
 /**
@@ -136,7 +139,7 @@ class ModelPickerComponent extends Container {
 		this.addChild(this.input);
 		this.addChild(this.listHost);
 		this.addChild(new Text(
-			theme.fg("dim", "type to search · ↑↓ navigate · enter select · alt+c clear · esc cancel"),
+			theme.fg("dim", "type to search · ↑↓ navigate · enter select · ctrl+l clear · esc cancel"),
 			1,
 			0,
 		));
@@ -163,7 +166,7 @@ class ModelPickerComponent extends Container {
 
 	handleInput(data: string): void {
 		const kb = getKeybindings();
-		if (data === ALT_C || data === "\x1bC") {
+		if (data === CTRL_L || data === ALT_C || data === "\x1bC") {
 			this.onDone("auto");
 			return;
 		}
@@ -249,7 +252,6 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 		container.addChild(new Text(theme.fg("accent", theme.bold("Subagent model tiers (saved to settings.json)")), 1, 0));
 		listHost.addChild(buildSettingsList());
 		container.addChild(listHost);
-		container.addChild(new Text(theme.fg("dim", "enter/space change · esc close"), 1, 0));
 		container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
 
 		return {
