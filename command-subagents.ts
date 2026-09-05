@@ -204,6 +204,18 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 		let selectedIndex = 0;
 		const itemCount = () => (config?.auto === true ? 1 : 1 + TIER_LEVELS.length);
 
+		// A rebuilt SettingsList starts with its cursor on row 0. Re-apply the
+		// mirrored highlight by feeding the fresh list down-arrows (public API
+		// only — there is no cursor setter). This keeps the visible cursor and
+		// the ctrl+alt+l clear target in sync across rebuilds.
+		const rebuildMenu = () => {
+			selectedIndex = Math.min(selectedIndex, itemCount() - 1);
+			const list = buildSettingsList();
+			for (let i = 0; i < selectedIndex; i++) list.handleInput("\x1b[B"); // down
+			listHost.clear();
+			listHost.addChild(list);
+		};
+
 		const buildSettingsList = () => {
 			const autoOn = config?.auto === true;
 			const explicit = explicitTiers();
@@ -223,7 +235,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 							id: level,
 							label: level,
 							currentValue: config?.[level] ?? "auto",
-							description: `Explicit model for "${level}" tasks; auto picks one when unset`,
+							description: `Explicit model for "${level}" tasks · enter: pick model · ctrl+alt+l: clear`,
 							submenu: (_current, submenuDone) =>
 								new ModelPickerComponent(tui, theme, level, config?.[level] ?? "auto", options, submenuDone),
 						}))),
@@ -239,11 +251,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 				}
 				config = next;
 				// Toggling auto adds/removes the tier rows — rebuild the menu.
-				if (id === AUTO_ID) {
-					selectedIndex = Math.min(selectedIndex, itemCount() - 1);
-					listHost.clear();
-					listHost.addChild(buildSettingsList());
-				}
+				if (id === AUTO_ID) rebuildMenu();
 				tui.requestRender();
 			}, () => done(true));
 		};
@@ -270,9 +278,9 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 							return;
 						}
 						config = next;
-						// Refresh the row so the tier shows "auto" again.
-						listHost.clear();
-						listHost.addChild(buildSettingsList());
+						// Refresh the row so the tier shows "auto" again, keeping the
+						// cursor on the same (now cleared) tier row.
+						rebuildMenu();
 					}
 					tui.requestRender();
 					return;
