@@ -32,6 +32,8 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   - `jobs.ts` — job orchestration: chain runner, concurrency limiter,
     result builders, model-tier context
   - `tui.ts` — TUI rendering helpers + persistent status widget
+  - `command-subagents.ts` — `/subagents` settings dialog: auto-tier toggle +
+    per-tier model pickers, persisted via `writeModelTiers` in jobs.ts
   - `watch-render.ts` — markdown-aware trace→lines rendering for the watch
     pane: sealed + pending text/thinking through pi's native Markdown +
     getMarkdownTheme, memoized via live.ts's LineCache. Leaf module;

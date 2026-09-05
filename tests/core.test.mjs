@@ -40,6 +40,7 @@ import {
 	deriveTaskName,
 	continuationPrompt,
 	normalizeTierConfig,
+	applyTierConfigChange,
 	isTierLevel,
 	parseAgentMarkdown,
 	pickAutoTier,
@@ -176,6 +177,58 @@ test("normalizeTierConfig returns undefined for missing, empty, or malformed con
 	assert.equal(normalizeTierConfig({}), undefined);
 	assert.equal(normalizeTierConfig({ auto: "yes" }), undefined);
 	assert.equal(normalizeTierConfig({ deep: "" }), undefined);
+});
+
+// ── Model tiers: applyTierConfigChange ───────────────────────────────────────
+
+test("applyTierConfigChange toggles the auto flag from an empty config", () => {
+	assert.deepEqual(applyTierConfigChange(undefined, { kind: "auto", value: true }), { auto: true });
+	// auto: false persists as an explicit user choice (matches normalizeTierConfig semantics)
+	assert.deepEqual(applyTierConfigChange({ auto: true }, { kind: "auto", value: false }), { auto: false });
+	assert.deepEqual(applyTierConfigChange(undefined, { kind: "auto", value: false }), { auto: false });
+});
+
+test("applyTierConfigChange toggles auto without dropping explicit tiers", () => {
+	const prev = { auto: true, fast: "p/fast" };
+	assert.deepEqual(applyTierConfigChange(prev, { kind: "auto", value: false }), { auto: false, fast: "p/fast" });
+	assert.deepEqual(applyTierConfigChange({ fast: "p/fast" }, { kind: "auto", value: true }), {
+		auto: true,
+		fast: "p/fast",
+	});
+});
+
+test("applyTierConfigChange sets a tier mapping, preserving other keys", () => {
+	assert.deepEqual(applyTierConfigChange(undefined, { kind: "tier", level: "fast", model: "p/m-1" }), {
+		fast: "p/m-1",
+	});
+	const prev = { auto: false, deep: "p/d" };
+	assert.deepEqual(applyTierConfigChange(prev, { kind: "tier", level: "balanced", model: "  p/b  " }), {
+		auto: false,
+		balanced: "p/b",
+		deep: "p/d",
+	});
+});
+
+test("applyTierConfigChange clears a tier mapping and collapses when empty", () => {
+	assert.deepEqual(applyTierConfigChange({ fast: "p/f", deep: "p/d" }, { kind: "tier", level: "fast", model: undefined }), {
+		deep: "p/d",
+	});
+	// Last mapping removed → feature off
+	assert.equal(applyTierConfigChange({ fast: "p/f" }, { kind: "tier", level: "fast", model: undefined }), undefined);
+	// Clearing an absent tier is a no-op
+	assert.equal(applyTierConfigChange(undefined, { kind: "tier", level: "balanced", model: undefined }), undefined);
+});
+
+test("applyTierConfigChange treats 'auto', empty, and whitespace models as clear", () => {
+	assert.equal(applyTierConfigChange({ fast: "p/f" }, { kind: "tier", level: "fast", model: "auto" }), undefined);
+	assert.equal(applyTierConfigChange({ fast: "p/f" }, { kind: "tier", level: "fast", model: "  AUTO  " }), undefined);
+	assert.equal(applyTierConfigChange({ fast: "p/f" }, { kind: "tier", level: "fast", model: "" }), undefined);
+	assert.equal(applyTierConfigChange({ fast: "p/f" }, { kind: "tier", level: "fast", model: "   " }), undefined);
+});
+
+test("applyTierConfigChange ignores unknown tiers and invalid auto values", () => {
+	assert.deepEqual(applyTierConfigChange({ fast: "p/f" }, { kind: "tier", level: "junk", model: "x" }), { fast: "p/f" });
+	assert.equal(applyTierConfigChange(undefined, { kind: "auto", value: "yes" }), undefined);
 });
 
 test("isTierLevel accepts only fast, balanced, deep", () => {

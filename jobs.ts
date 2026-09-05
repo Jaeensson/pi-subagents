@@ -103,6 +103,52 @@ export function getDefaultJobsRoot(): string {
 	return path.join(getAgentDir(), "subagent-jobs");
 }
 
+/** Outcome of a settings.json write attempt. */
+export type WriteSettingsResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Persist `subagent.modelTiers` in the user's settings.json (read-modify-write,
+ * temp-file + rename). All other settings keys are preserved untouched. Passing
+ * `undefined` removes the `modelTiers` key entirely. Fails without writing when
+ * the existing file is unparseable — never clobber a broken file silently.
+ */
+export function writeModelTiers(next: TierConfig | undefined): WriteSettingsResult {
+	const settingsPath = path.join(getAgentDir(), "settings.json");
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+	} catch (err) {
+		return {
+			ok: false,
+			error: `settings.json is unreadable (${err instanceof Error ? err.message : String(err)}); not overwriting`,
+		};
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return { ok: false, error: "settings.json is not a JSON object; not overwriting" };
+	}
+	const settings = parsed as Record<string, unknown>;
+	if (next) {
+		const subagent =
+			settings.subagent && typeof settings.subagent === "object" && !Array.isArray(settings.subagent)
+				? (settings.subagent as Record<string, unknown>)
+				: {};
+		subagent.modelTiers = next;
+		settings.subagent = subagent;
+	} else if (settings.subagent && typeof settings.subagent === "object" && !Array.isArray(settings.subagent)) {
+		const subagent = settings.subagent as Record<string, unknown>;
+		delete subagent.modelTiers;
+		if (Object.keys(subagent).length === 0) delete settings.subagent;
+	}
+	try {
+		const tmp = `${settingsPath}.tmp-${process.pid}`;
+		fs.writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`);
+		fs.renameSync(tmp, settingsPath);
+	} catch (err) {
+		return { ok: false, error: `failed to write settings.json: ${err instanceof Error ? err.message : String(err)}` };
+	}
+	return { ok: true };
+}
+
 /** Build the model context for one tool call from the extension context. */
 export function buildModelContext(ctx: ExtensionContext): ModelContext {
 	const settings = readSettingsFile();

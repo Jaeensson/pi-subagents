@@ -26,6 +26,7 @@
  *   process.ts  — child pi process lifecycle (spawn/kill/finalize)
  *   jobs.ts     — job orchestration: chain runner, concurrency, results, model context
  *   tui.ts      — TUI rendering helpers + persistent status widget
+ *   command-subagents.ts — /subagents settings dialog (model tiers)
  *   tools/*.ts  — one file per registered tool
  */
 
@@ -44,6 +45,7 @@ import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, reg
 import { deletePath, isJobExpired, isResumableJob, listJobManifests, pruneEmptyBuckets } from "./store.ts";
 import { formatJobListings, getDefaultJobsRoot, listJobsForCurrentSession, readJobRetentionDays } from "./jobs.ts";
 import { disposeWatch, handleWatchInput, maybeAutoCloseWatch } from "./watch.ts";
+import { registerSubagentsCommand } from "./command-subagents.ts";
 import { subagentAgentsTool } from "./tools/subagent-agents.ts";
 import { subagentPauseTool } from "./tools/subagent-pause.ts";
 import { subagentResumeTool } from "./tools/subagent-resume.ts";
@@ -140,4 +142,5 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(subagentAgentsTool);
 	pi.registerTool(subagentPauseTool);
 	pi.registerTool(subagentResumeTool);
+	registerSubagentsCommand(pi);
 }

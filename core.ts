@@ -183,6 +183,34 @@ export function normalizeTierConfig(value: unknown): TierConfig | undefined {
 	return cfg;
 }
 
+/** A single configuration change applied by `applyTierConfigChange`. */
+export type TierConfigChange =
+	| { kind: "auto"; value: boolean }
+	| { kind: "tier"; level: TierLevel; /** undefined, "auto", or empty → clear the mapping */ model?: string };
+
+/**
+ * Apply one settings-dialog change to a TierConfig and return the normalized
+ * result (undefined when nothing usable remains — feature off). Pure: never
+ * mutates `prev`. Unknown tiers, non-boolean auto values, and the literal
+ * model id "auto" (a dialog footguard) are ignored/treated as a clear.
+ */
+export function applyTierConfigChange(
+	prev: TierConfig | undefined,
+	change: TierConfigChange,
+): TierConfig | undefined {
+	const next: TierConfig = prev ? { ...prev } : {};
+	if (change.kind === "auto") {
+		if (typeof change.value !== "boolean") return normalizeTierConfig(next);
+		next.auto = change.value;
+	} else {
+		if (!isTierLevel(change.level)) return normalizeTierConfig(next);
+		const model = typeof change.model === "string" ? change.model.trim() : undefined;
+		if (model && model.toLowerCase() !== "auto") next[change.level] = model;
+		else delete next[change.level];
+	}
+	return normalizeTierConfig(next);
+}
+
 /** Result of the auto-picker for one tier. */
 export interface AutoPick {
 	model?: string;
