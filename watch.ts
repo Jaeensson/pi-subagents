@@ -12,10 +12,11 @@
  * tailing.
  *
  * Key events: the terminal reports press/repeat/release (Kitty flag 2) and
- * matchesKey matches all three. A key release of the toggle key would
- * re-match `shift+ctrl+w` and undo the toggle, and held repeats would
- * flip-flop it — so releases are ignored entirely and repeats are ignored
- * for the toggle key (repeats of scroll keys are kept: holding ↑ scrolls).
+ * matchesKey matches all three. A key release of the toggle key
+ * (WATCH_PANE_KEYBIND) would re-match it and undo the toggle, and held
+ * repeats would flip-flop it — so releases are ignored entirely and repeats
+ * are ignored for the toggle key (repeats of scroll keys are kept: holding ↑
+ * scrolls).
  *
  * Rendering: assistant text and thinking segments go through pi's native
  * Markdown component (getMarkdownTheme) — syntax-highlighted code blocks,

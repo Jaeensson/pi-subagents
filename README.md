@@ -81,7 +81,7 @@ TUI-only — print/JSON modes are unaffected.
 
 ### Watch pane
 
-While subagents run, press `shift+ctrl+w` to open a centered, bordered live
+While subagents run, press `ctrl+alt+s` to open a centered, bordered live
 watch pane showing a subagent's reasoning stream in real time — thinking,
 visible text, tool calls, and in-progress tool output, rendered with the same
 native markdown as the main conversation: headings, lists, tables, and
@@ -94,7 +94,7 @@ syntax-highlighted code blocks (thinking stays italic thinkingText):
 │● live   ↑↓ scroll · PgUp/PgDn · Tab agent · End tail · Esc close   │
 └────────────────────────────────────────────────────────────────────┘
 
-- `shift+ctrl+w` toggles the pane (TUI only). `↑↓` scroll the retained
+- `ctrl+alt+s` toggles the pane (TUI only). `↑↓` scroll the retained
   history, `PgUp`/`PgDn` page, `Tab` cycles running agents, `End` jumps back
   to the live tail, `Esc` (or the toggle key) closes.
 - The header shows the subagent's context usage (`ctx 3.0%/200k`, updated

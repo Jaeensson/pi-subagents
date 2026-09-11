@@ -10,7 +10,7 @@ export const DEFAULT_OUTPUT_CAP_BYTES = 50 * 1024;
 export const NOTIFICATION_PREVIEW_BYTES = 200;
 
 /** Keybind that toggles the subagent watch pane (tui.ts hint + watch.ts matcher). */
-export const WATCH_PANE_KEYBIND = "shift+ctrl+w";
+export const WATCH_PANE_KEYBIND = "ctrl+alt+s";
 
 // ── Watch pane frame layout ──────────────────────────────────────────────────
 
