@@ -39,6 +39,7 @@ import {
 	type ManifestChainStep,
 } from "./store.ts";
 import {
+	blocksResume,
 	checkJobComplete,
 	emptyUsage,
 	getParentSessionId,
@@ -370,7 +371,8 @@ export async function resumeJob(
 	if (!manifest) {
 		return { error: `No persisted job "${jobId}" for this session (jobs are bound to the session that spawned them).` };
 	}
-	if (jobs.has(jobId)) return { error: `Job ${jobId} is already active in this session.` };
+	if (blocksResume(jobs.get(jobId)))
+		return { error: `Job ${jobId} is still active in this session; pause or wait for it to finish first.` };
 	const plan = resumePlan(manifest);
 	if (!plan) return { error: `Job ${jobId} is not resumable (status: ${manifest.status}).` };
 

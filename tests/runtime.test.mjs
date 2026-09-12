@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkJobComplete, setJobFinishedHook, setMessageSender } from "../runtime.ts";
+import { blocksResume, checkJobComplete, setJobFinishedHook, setMessageSender } from "../runtime.ts";
 
 /** Minimal fake job; checkJobComplete only reads the fields it needs. */
 function makeJob(id, mode = "single") {
@@ -79,6 +79,15 @@ test("checkJobComplete stays open while tasks are paused", () => {
 	job.tasks[1].status = "completed";
 	checkJobComplete(job);
 	assert.equal(job.finished, true);
+});
+
+test("blocksResume: only in-flight (unfinished) registry jobs block a resume", () => {
+	// No registry entry → nothing blocks; the persisted manifest decides.
+	assert.equal(blocksResume(undefined), false);
+	// Finished job (failed or completed) → stale entry, resumable.
+	assert.equal(blocksResume({ ...makeJob("j-done"), finished: true }), false);
+	// In-flight job (running or paused tasks pending) → blocked.
+	assert.equal(blocksResume({ ...makeJob("j-live"), finished: false }), true);
 });
 
 test("completion notification includes the task name", () => {

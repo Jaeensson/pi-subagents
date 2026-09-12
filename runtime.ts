@@ -320,6 +320,16 @@ function maybeNotifyJob(job: Job) {
 	}
 }
 
+/**
+ * True when a registered job still blocks a resume attempt: it has in-flight
+ * work (running/paused tasks, pending spawns, chain runner). Finished jobs —
+ * including failed/interrupted ones — are stale registry entries and must not
+ * block resuming their persisted manifest.
+ */
+export function blocksResume(job: Job | undefined): boolean {
+	return job !== undefined && !job.finished;
+}
+
 export function checkJobComplete(job: Job) {
 	if (job.finished) return;
 	if (job.mode === "chain") {
