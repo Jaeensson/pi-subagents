@@ -19,6 +19,7 @@ import {
 	isResumableStatus,
 	normalizeTierConfig,
 	resolveAgent,
+	safeModelPin,
 	type AgentSummary,
 	type CatalogModel,
 	type TierConfig,
@@ -441,10 +442,16 @@ export async function resumeJob(
 		if (!sessionFile) {
 			notes.push(`session file missing for task ${t.name ?? t.taskId}; re-running from scratch`);
 		}
+		// Child sessions self-report bare model ids; pinning one on a resume can
+		// be ambiguous across providers. Qualify when unique, drop otherwise.
+		const pin = safeModelPin(t.model, init.modelCtx.catalog);
+		if (t.model && !pin) {
+			notes.push(`model "${t.model}" is ambiguous or unknown; task ${t.name ?? t.taskId} re-resolves its model`);
+		}
 		return spawnTask(agent ?? resolveAgent(undefined, init.agents)!, t.task, t.cwd, job.id, {
 			step: t.step,
-			tier: t.model ? undefined : t.tier,
-			modelOverride: t.model,
+			tier: pin ? undefined : t.tier,
+			modelOverride: pin,
 			name: t.name,
 			modelCtx: init.modelCtx,
 			resume: sessionFile ? { sessionFile, originalTask: t.task } : undefined,

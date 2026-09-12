@@ -240,6 +240,22 @@ export function familyStem(id: string): string {
  * Picks are returned provider-qualified (`provider/id`) so they are
  * unambiguous when the same id exists on multiple authenticated providers.
  */
+/**
+ * Make a manifest-recorded model id safe to pin on a resume spawn. Child
+ * sessions self-report bare model ids ("glm-5.3-flash"), which are ambiguous
+ * when several authenticated providers offer the same id — pinning one makes
+ * the resumed child exit immediately with a model-resolution error. Returns
+ * the id unchanged when already provider-qualified, qualifies it when the
+ * catalog has exactly one match, and returns undefined when the pin must be
+ * dropped (ambiguous or unknown) so tier/default resolution takes over.
+ */
+export function safeModelPin(model: string | undefined, catalog: CatalogModel[]): string | undefined {
+	if (!model) return undefined;
+	if (model.includes("/")) return model;
+	const matches = catalog.filter((m) => m.id === model);
+	return matches.length === 1 ? `${matches[0].provider}/${model}` : undefined;
+}
+
 export function pickAutoTier(
 	level: "fast" | "deep",
 	options: { defaultModel?: string; catalog: CatalogModel[] },

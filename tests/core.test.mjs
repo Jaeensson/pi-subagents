@@ -14,6 +14,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import {
+	safeModelPin,
 	applyEventLine,
 	buildChildArgs,
 	completionHeader,
@@ -1233,4 +1234,24 @@ test("formatStatusReport shows name and paused/interrupted icons", () => {
 	const text = formatStatusReport([mk({ status: "paused" }), mk({ id: "t2", name: undefined, status: "interrupted" })]);
 	assert.match(text, /\[worker\/feat-1\].*⏸/s);
 	assert.match(text, /\[worker\].*⚠/s);
+});
+
+test("safeModelPin: qualifies unique bare ids, drops ambiguous/unknown pins", () => {
+	const catalog = [
+		{ id: "glm-5.3-flash", provider: "zai", inputCost: 1 },
+		{ id: "glm-5.3-flash", provider: "opencode", inputCost: 2 },
+		{ id: "kimi-k2", provider: "zai", inputCost: 3 },
+	];
+	// Undefined → no pin.
+	assert.equal(safeModelPin(undefined, catalog), undefined);
+	// Already provider-qualified → pass through untouched.
+	assert.equal(safeModelPin("zai/glm-5.3-flash", catalog), "zai/glm-5.3-flash");
+	// Bare id, unique provider → qualified pin.
+	assert.equal(safeModelPin("kimi-k2", catalog), "zai/kimi-k2");
+	// Bare id offered by several providers → drop the pin.
+	assert.equal(safeModelPin("glm-5.3-flash", catalog), undefined);
+	// Unknown id → drop the pin rather than spawn a doomed child.
+	assert.equal(safeModelPin("no-such-model", catalog), undefined);
+	// Empty catalog → never pin a bare id.
+	assert.equal(safeModelPin("kimi-k2", []), undefined);
 });
