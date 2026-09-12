@@ -81,19 +81,25 @@ function cleanupTaskTemp(task: Task) {
 		}
 }
 
-function finalizeTask(task: Task, code: number | null) {
+function finalizeTask(task: Task, code: number | null, signal: string | null = null) {
 	if (task.status !== "running") return;
 	task.exitCode = code ?? 1;
 	task.finishedAt = Date.now();
 	const sr = task.stopReason;
 	const pauseIntended = task.pauseRequested === true;
+	// Classification order matters: user intent (pause/abort) wins even when a
+	// signal is present (killTask SIGTERMs/SIGKILLs the child); a signal we did
+	// not request means the child crashed or was killed externally — an
+	// interruption, not a task failure, so the manifest stays resumable.
 	task.status = pauseIntended
 		? "paused"
-		: code === 0 && sr !== "error" && sr !== "aborted"
-			? "completed"
-			: sr === "aborted"
-				? "aborted"
-				: "failed";
+		: sr === "aborted"
+			? "aborted"
+			: signal
+				? "interrupted"
+				: code === 0 && sr !== "error"
+					? "completed"
+					: "failed";
 	cleanupTaskTemp(task);
 	decRunningCount();
 	updateStatusWidget();
@@ -101,7 +107,8 @@ function finalizeTask(task: Task, code: number | null) {
 
 	const job = jobs.get(task.jobId);
 	if (job) {
-		if (task.status !== "completed" && task.status !== "paused" && job.status === "running") job.status = "failed";
+		if (task.status !== "completed" && task.status !== "paused" && job.status === "running")
+			job.status = task.status === "interrupted" ? "interrupted" : "failed";
 		job.emit?.(
 			job.mode === "parallel"
 				? `Parallel: ${job.tasks.filter((t) => t.status !== "running").length}/${job.tasks.length} done...`
@@ -254,7 +261,7 @@ export async function spawnTask(
 		proc.stderr.on("data", (data) => {
 			task.stderr += data.toString();
 		});
-		proc.on("close", (code) => finalizeTask(task, code));
+		proc.on("close", (code, signal) => finalizeTask(task, code, signal));
 		proc.on("error", (err) => {
 			task.stderr += `spawn error: ${err.message}\n`;
 			finalizeTask(task, 1);

@@ -66,7 +66,7 @@ export interface Task {
 export interface Job {
 	id: string;
 	mode: JobMode;
-	status: "running" | "completed" | "failed" | "aborted";
+	status: "running" | "completed" | "failed" | "aborted" | "interrupted";
 	errorMessage?: string;
 	tasks: Task[];
 	chainTotal?: number;
@@ -284,9 +284,10 @@ export function waitForJob(jobId: string, opts: WaitOptions = {}): Promise<boole
 
 // ── Job completion ───────────────────────────────────────────────────────────
 
-function taskStatusLabel(t: Task): "completed" | "failed" | "aborted" {
+function taskStatusLabel(t: Task): "completed" | "failed" | "aborted" | "interrupted" {
 	if (t.status === "completed") return "completed";
 	if (t.status === "aborted") return "aborted";
+	if (t.status === "interrupted") return "interrupted";
 	return "failed";
 }
 

@@ -167,7 +167,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 				};
 			}
 			const last = job.tasks[job.tasks.length - 1];
-			if (job.status === "failed") {
+			if (job.status === "failed" || job.status === "interrupted") {
 				return {
 					content: [{ type: "text", text: job.errorMessage || "Chain failed." }],
 					details: jobDetails(job),
