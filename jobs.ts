@@ -270,6 +270,14 @@ export function runChainFrom(
 				job.errorMessage = `Chain aborted at step ${i + 1} (${step.agent})`;
 				break;
 			}
+			if (task.status === "interrupted") {
+				// Environment killed the step (external signal or stream error,
+				// e.g. connection loss). Stop the chain and stay resumable at
+				// this step instead of continuing on a truncated {previous}.
+				job.status = "interrupted";
+				job.errorMessage = `Chain interrupted at step ${i + 1} (${step.agent}): ${task.errorMessage || "child did not finish"}`;
+				break;
+			}
 			if (isFailedState(task)) {
 				job.status = "failed";
 				job.errorMessage = `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(task)}`;
@@ -326,7 +334,7 @@ export function collectResultText(jobIds: string[], timeoutNote?: string): { tex
 		if (job) {
 			for (const t of job.tasks) {
 				collected.push(t);
-				if (isFailedState(t)) anyFailed = true;
+				if (isFailedState(t) || t.status === "interrupted") anyFailed = true;
 			}
 		}
 	}

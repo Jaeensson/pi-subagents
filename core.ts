@@ -543,6 +543,34 @@ export function isFailedState(state: { exitCode: number; stopReason?: string; st
 	return state.exitCode !== 0 || state.stopReason === "error" || state.stopReason === "aborted";
 }
 
+/**
+ * Pure finalize-time status classifier (used by process.ts's finalizeTask).
+ *
+ * Death modes, in priority order:
+ * - User intent first: pauseRequested → paused; an aborted stream (killTask
+ *   sets stopReason before signalling) → aborted, even when a signal is
+ *   present.
+ * - Environment killed the run → interrupted (RESUMABLE): an external signal
+ *   (crash / external kill), or a stream-level `error` stopReason. The latter
+ *   is how network/auth/provider failures surface: pi's json mode always
+ *   exits 0 (its exit-code-1 handling is text-mode only), recording e.g.
+ *   stopReason "error", errorMessage "Connection error." after 48 productive
+ *   turns. The run was cut short — the task did not fail.
+ * - Only harness-level deaths are failed (terminal): spawn failure and
+ *   non-zero exits that ended without any stream result.
+ */
+export function classifyTaskExit(input: {
+	pauseRequested?: boolean;
+	stopReason?: string;
+	code: number | null;
+	signal?: string | null;
+}): "paused" | "aborted" | "interrupted" | "completed" | "failed" {
+	if (input.pauseRequested) return "paused";
+	if (input.stopReason === "aborted") return "aborted";
+	if (input.signal || input.stopReason === "error") return "interrupted";
+	return input.code === 0 ? "completed" : "failed";
+}
+
 // ── Named sessions & resumability ────────────────────────────────────────────
 
 /** Resumable task statuses: only `completed` (and `failed`) are not resumable. */

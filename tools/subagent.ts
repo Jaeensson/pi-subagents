@@ -207,14 +207,21 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 						isError: true,
 					};
 				}
-				const successCount = job.tasks.filter((t) => !isFailedState(t)).length;
+				const successCount = job.tasks.filter((t) => !isFailedState(t) && t.status !== "interrupted").length;
 				const summaries = job.tasks.map((t) => {
 					const output = truncateOutput(getResultOutput(t), 50 * 1024);
-					const status = isFailedState(t) ? `failed${t.stopReason && t.stopReason !== "end" ? ` (${t.stopReason})` : ""}` : "completed";
+					const status = isFailedState(t)
+						? `failed${t.stopReason && t.stopReason !== "end" ? ` (${t.stopReason})` : ""}`
+						: t.status === "interrupted"
+							? `interrupted${t.stopReason ? ` (${t.stopReason})` : ""}`
+							: "completed";
 					return `### [${t.agent}] ${status}\n\n${output}`;
 				});
+				const interruptedNote = job.tasks.some((t) => t.status === "interrupted")
+					? `\n\nInterrupted task(s) can be resumed with subagent_resume (job id: ${job.id}).`
+					: "";
 				return {
-					content: [{ type: "text", text: `Parallel: ${successCount}/${job.tasks.length} succeeded\n\n${summaries.join("\n\n---\n\n")}` }],
+					content: [{ type: "text", text: `Parallel: ${successCount}/${job.tasks.length} succeeded\n\n${summaries.join("\n\n---\n\n")}${interruptedNote}` }],
 					details: jobDetails(job),
 					isError: successCount !== job.tasks.length,
 				};
@@ -241,9 +248,13 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 				isError: true,
 			};
 		}
-		if (isFailedState(task)) {
+		if (isFailedState(task) || task.status === "interrupted") {
+			const interrupted = task.status === "interrupted";
+			const label = interrupted ? `interrupted (${task.stopReason || "no result"})` : task.stopReason || "failed";
+			const output = interrupted && task.errorMessage ? task.errorMessage : getResultOutput(task);
+			const hint = interrupted ? `\n\nJob ${job.id} was interrupted and is resumable via subagent_resume.` : "";
 			return {
-				content: [{ type: "text", text: `Agent ${task.stopReason || "failed"}: ${getResultOutput(task)}` }],
+				content: [{ type: "text", text: `Agent ${label}: ${output}${hint}` }],
 				details: jobDetails(job),
 				isError: true,
 			};
@@ -340,8 +351,8 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			lines.push(`${icon} ${theme.fg("toolTitle", theme.bold(t.agent))}${theme.fg("muted", ` (${t.agentSource})`)}`);
 			if (t.status === "running") {
 				lines.push(theme.fg("muted", "(running in background...)"));
-			} else if (isError && t.errorMessage) {
-				lines.push(theme.fg("error", `Error: ${t.errorMessage}`));
+			} else if ((isError || t.status === "interrupted") && t.errorMessage) {
+				lines.push(theme.fg(t.status === "interrupted" ? "warning" : "error", `Error: ${t.errorMessage}`));
 			} else {
 				lines.push(renderTaskList(renderItems(t), COLLAPSED_ITEM_COUNT, theme));
 				if (expanded) {

@@ -30,6 +30,7 @@ import {
 	formatTokens,
 	formatUsageStats,
 	familyStem,
+	classifyTaskExit,
 	firstLine,
 	getFinalOutput,
 	getResultOutput,
@@ -1189,6 +1190,33 @@ test("isFailedState treats paused and interrupted as not failed; still fails abo
 	assert.equal(isFailedState({ exitCode: 1, stopReason: "aborted" }), true);
 	assert.equal(isFailedState({ exitCode: 0, status: "completed" }), false);
 	assert.equal(isFailedState({ exitCode: 1, stopReason: "error", status: "failed" }), true);
+});
+
+test("classifyTaskExit: user intent wins — pauseRequested → paused, aborted stream → aborted even under signal", () => {
+	assert.equal(classifyTaskExit({ pauseRequested: true, code: 0 }), "paused");
+	assert.equal(classifyTaskExit({ pauseRequested: true, code: 1, stopReason: "error", signal: "SIGKILL" }), "paused");
+	assert.equal(classifyTaskExit({ code: 143, stopReason: "aborted" }), "aborted");
+	assert.equal(classifyTaskExit({ code: null, signal: "SIGKILL", stopReason: "aborted" }), "aborted");
+});
+
+test("classifyTaskExit: external signal death → interrupted", () => {
+	assert.equal(classifyTaskExit({ code: null, signal: "SIGKILL" }), "interrupted");
+	assert.equal(classifyTaskExit({ code: null, signal: "SIGTERM" }), "interrupted");
+});
+
+test("classifyTaskExit: stream error (e.g. connection loss) is an interruption, not a task failure", () => {
+	// pi json mode exits 0 even when the run dies on an API error; the real
+	// incident recorded exitCode 0, stopReason "error", "Connection error."
+	assert.equal(classifyTaskExit({ code: 0, stopReason: "error" }), "interrupted");
+	assert.equal(classifyTaskExit({ code: 1, stopReason: "error" }), "interrupted");
+});
+
+test("classifyTaskExit: clean exit without stream error completes; non-zero without stream result fails", () => {
+	assert.equal(classifyTaskExit({ code: 0, stopReason: "end" }), "completed");
+	assert.equal(classifyTaskExit({ code: 0, stopReason: "toolUse" }), "completed");
+	assert.equal(classifyTaskExit({ code: 0 }), "completed");
+	assert.equal(classifyTaskExit({ code: 1 }), "failed");
+	assert.equal(classifyTaskExit({ code: null }), "failed");
 });
 
 test("statusIcon maps each status", () => {

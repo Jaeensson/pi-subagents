@@ -15,6 +15,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import {
 	applyEventLine,
 	buildChildArgs,
+	classifyTaskExit,
 	continuationPrompt,
 	deriveTaskName,
 	getFinalOutput,
@@ -86,20 +87,13 @@ function finalizeTask(task: Task, code: number | null, signal: string | null = n
 	task.exitCode = code ?? 1;
 	task.finishedAt = Date.now();
 	const sr = task.stopReason;
-	const pauseIntended = task.pauseRequested === true;
 	// Classification order matters: user intent (pause/abort) wins even when a
-	// signal is present (killTask SIGTERMs/SIGKILLs the child); a signal we did
-	// not request means the child crashed or was killed externally — an
-	// interruption, not a task failure, so the manifest stays resumable.
-	task.status = pauseIntended
-		? "paused"
-		: sr === "aborted"
-			? "aborted"
-			: signal
-				? "interrupted"
-				: code === 0 && sr !== "error"
-					? "completed"
-					: "failed";
+	// signal is present (killTask SIGTERMs/SIGKILLs the child). Everything else
+	// is classified by death mode (see classifyTaskExit): external signal or
+	// stream-level error (network/auth/provider — pi json mode exits 0 on
+	// these) is an interruption and stays resumable; only harness-level deaths
+	// (spawn failure, non-zero exit with no stream result) are `failed`.
+	task.status = classifyTaskExit({ pauseRequested: task.pauseRequested, stopReason: sr, code, signal });
 	cleanupTaskTemp(task);
 	decRunningCount();
 	updateStatusWidget();
