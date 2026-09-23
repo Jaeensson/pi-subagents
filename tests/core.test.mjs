@@ -31,6 +31,7 @@ import {
 	formatUsageStats,
 	familyStem,
 	classifyTaskExit,
+	rollupTaskDeathToJob,
 	firstLine,
 	getFinalOutput,
 	getResultOutput,
@@ -1262,6 +1263,21 @@ test("formatStatusReport shows name and paused/interrupted icons", () => {
 	const text = formatStatusReport([mk({ status: "paused" }), mk({ id: "t2", name: undefined, status: "interrupted" })]);
 	assert.match(text, /\[worker\/feat-1\].*⏸/s);
 	assert.match(text, /\[worker\].*⚠/s);
+});
+
+test("rollupTaskDeathToJob: user/environment deaths keep their resumable category; failures roll up failed; non-running jobs unchanged", () => {
+	// User interrupt (sync abort) must roll the job to "aborted", not "failed" — the bug that
+	// made the resume gate refuse a job the listing advertised as resumable.
+	assert.equal(rollupTaskDeathToJob("running", "aborted"), "aborted");
+	assert.equal(rollupTaskDeathToJob("running", "interrupted"), "interrupted");
+	assert.equal(rollupTaskDeathToJob("running", "failed"), "failed");
+	// Guarded inputs (completed/paused never reach the rollup): no-op, not "failed".
+	assert.equal(rollupTaskDeathToJob("running", "completed"), "running");
+	assert.equal(rollupTaskDeathToJob("running", "paused"), "running");
+	// A job that already left "running" keeps its terminal/interrupted status.
+	assert.equal(rollupTaskDeathToJob("failed", "aborted"), "failed");
+	assert.equal(rollupTaskDeathToJob("aborted", "failed"), "aborted");
+	assert.equal(rollupTaskDeathToJob("interrupted", "failed"), "interrupted");
 });
 
 test("safeModelPin: qualifies unique bare ids, drops ambiguous/unknown pins", () => {

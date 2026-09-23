@@ -571,6 +571,23 @@ export function classifyTaskExit(input: {
 	return input.code === 0 ? "completed" : "failed";
 }
 
+export type JobStatus = "running" | "completed" | "failed" | "aborted" | "interrupted";
+
+/**
+ * Job-level status rollup when a task finalizes without completing. Deaths that
+ * stay resumable at task level (user abort, environment interruption) keep
+ * their category so the job remains resumable (RESUMABLE_JOB_STATUSES);
+ * only harness-level failures roll up as "failed". Anything else (completed/
+ * paused — callers guard these) is a no-op. A job that already left "running"
+ * keeps its status: first death wins, later task exits don't re-classify it.
+ */
+export function rollupTaskDeathToJob(jobStatus: JobStatus, taskStatus: string): JobStatus {
+	if (jobStatus !== "running") return jobStatus;
+	if (taskStatus === "interrupted" || taskStatus === "aborted") return taskStatus;
+	if (taskStatus === "failed") return "failed";
+	return jobStatus;
+}
+
 // ── Named sessions & resumability ────────────────────────────────────────────
 
 /** Resumable task statuses: only `completed` (and `failed`) are not resumable. */

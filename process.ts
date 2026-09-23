@@ -21,6 +21,7 @@ import {
 	getFinalOutput,
 	resolveContextWindow,
 	resolveModel,
+	rollupTaskDeathToJob,
 	type AgentSummary,
 } from "./core.ts";
 import { applyLiveEvent, emptyLiveTrace } from "./live.ts";
@@ -101,8 +102,8 @@ function finalizeTask(task: Task, code: number | null, signal: string | null = n
 
 	const job = jobs.get(task.jobId);
 	if (job) {
-		if (task.status !== "completed" && task.status !== "paused" && job.status === "running")
-			job.status = task.status === "interrupted" ? "interrupted" : "failed";
+		if (task.status !== "completed" && task.status !== "paused")
+			job.status = rollupTaskDeathToJob(job.status, task.status);
 		job.emit?.(
 			job.mode === "parallel"
 				? `Parallel: ${job.tasks.filter((t) => t.status !== "running").length}/${job.tasks.length} done...`

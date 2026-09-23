@@ -270,19 +270,35 @@ export async function pruneEmptyBuckets(root: string): Promise<void> {
 const RESUMABLE_JOB_STATUSES: readonly string[] = ["running", "interrupted", "aborted"];
 
 /**
+ * Structural view of a job for the resumability gate — shared by persisted
+ * manifests and live registry jobs (which have no manifest wrapper).
+ */
+export interface ResumabilityView {
+	status: string;
+	mode: string;
+	chain?: unknown;
+	chainTotal?: number;
+	tasks: Array<{ status: string; step?: number }>;
+}
+
+/**
  * A job is resumable when it is non-terminal, no task has failed, and there is
  * work left: a resumable task, or (chain mode) unstarted steps beyond the last
  * completed one.
  */
-export function isResumableJob(m: ManifestV1): boolean {
-	if (!RESUMABLE_JOB_STATUSES.includes(m.status)) return false;
-	if (m.tasks.some((t) => t.status === "failed")) return false;
-	if (m.tasks.some((t) => isResumableStatus(t.status))) return true;
-	if (m.mode === "chain" && m.chain && m.chainTotal) {
-		const highestCompleted = Math.max(0, ...m.tasks.filter((t) => t.status === "completed" && t.step).map((t) => t.step ?? 0));
-		return highestCompleted < m.chainTotal;
+export function isResumableJobView(v: ResumabilityView): boolean {
+	if (!RESUMABLE_JOB_STATUSES.includes(v.status)) return false;
+	if (v.tasks.some((t) => t.status === "failed")) return false;
+	if (v.tasks.some((t) => isResumableStatus(t.status))) return true;
+	if (v.mode === "chain" && v.chain && v.chainTotal) {
+		const highestCompleted = Math.max(0, ...v.tasks.filter((t) => t.status === "completed" && t.step).map((t) => t.step ?? 0));
+		return highestCompleted < v.chainTotal;
 	}
 	return false;
+}
+
+export function isResumableJob(m: ManifestV1): boolean {
+	return isResumableJobView(m);
 }
 
 export interface ResumePlan {

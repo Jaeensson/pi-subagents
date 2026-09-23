@@ -10,7 +10,7 @@ import * as path from "node:path";
 import {
 	matchSessionFile, isJobExpired, readManifest, writeManifest, updateManifest,
 	upsertManifestTask, toManifestTask, listJobManifests, resolveSessionFile,
-	isResumableJob, resumePlan, mergeJobListings, manifestPath,
+	isResumableJob, isResumableJobView, resumePlan, mergeJobListings, manifestPath,
 } from "../store.ts";
 
 let root;
@@ -120,6 +120,24 @@ test("isResumableJob: running/interrupted/aborted yes, failed/completed no, fail
 	assert.equal(isResumableJob(baseManifest({ status: "failed", tasks: [mt({ status: "failed" })] })), false);
 	assert.equal(isResumableJob(baseManifest({ status: "completed", tasks: [mt({ status: "completed" })] })), false);
 	assert.equal(isResumableJob(finishedJob([mt({ status: "completed" })])), false); // single, nothing to do
+});
+
+test("isResumableJob regression: aborted single job with an aborted task is resumable (user-interrupt sync run)", () => {
+	assert.equal(isResumableJob(baseManifest({ status: "aborted", tasks: [mt({ status: "aborted", stopReason: "aborted", exitCode: 143 })] })), true);
+});
+
+test("isResumableJobView mirrors isResumableJob on plain registry shapes", () => {
+	// Same resumability gate, structural input: live registry jobs have no manifest wrapper.
+	assert.equal(isResumableJobView({ status: "aborted", mode: "single", tasks: [{ status: "aborted" }] }), true);
+	assert.equal(isResumableJobView({ status: "failed", mode: "single", tasks: [{ status: "aborted" }] }), false);
+	assert.equal(isResumableJobView({ status: "interrupted", mode: "parallel", tasks: [{ status: "failed" }, { status: "aborted" }] }), false); // failed task blocks
+	assert.equal(isResumableJobView({ status: "running", mode: "parallel", tasks: [{ status: "paused" }] }), true);
+	// Chain clause: unstarted steps beyond the last completed one count as work left.
+	assert.equal(isResumableJobView({ status: "running", mode: "chain", chain: [], chainTotal: 3, tasks: [{ status: "completed", step: 1 }] }), true);
+	assert.equal(isResumableJobView({ status: "running", mode: "chain", chain: [], chainTotal: 3, tasks: [{ status: "completed", step: 3 }] }), false);
+	// isResumableJob agrees with the view on the same manifest.
+	const m = baseManifest({ status: "aborted", tasks: [mt({ status: "aborted" })] });
+	assert.equal(isResumableJob(m), isResumableJobView(m));
 });
 
 test("resumePlan single: respawns resumable tasks", () => {

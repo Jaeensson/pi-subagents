@@ -16,7 +16,6 @@ import {
 	getFinalOutput,
 	getResultOutput,
 	isFailedState,
-	isResumableStatus,
 	normalizeTierConfig,
 	resolveAgent,
 	safeModelPin,
@@ -28,6 +27,7 @@ import { flushJobStatus, killTask, pauseJobTasks, spawnTask } from "./process.ts
 import { emptyLiveTrace } from "./live.ts";
 import {
 	isResumableJob,
+	isResumableJobView,
 	listJobManifests,
 	MANIFEST_VERSION,
 	mergeJobListings,
@@ -517,7 +517,12 @@ export function listJobsForCurrentSession(): JobListing[] {
 		jobStatus: j.finished ? j.status : "running",
 		createdAt: j.tasks.length > 0 ? Math.min(...j.tasks.map((t) => t.startedAt)) : Date.now(),
 		updatedAt: Date.now(),
-		resumable: j.tasks.some((t) => isResumableStatus(t.status)),
+		resumable: isResumableJobView({
+			status: j.finished ? j.status : "running",
+			mode: j.mode,
+			chainTotal: j.chainTotal,
+			tasks: j.tasks,
+		}),
 		tasks: j.tasks.map((t) => ({ taskId: t.id, name: t.name, agent: t.agent, status: t.status, step: t.step })),
 		source: "registry" as const,
 	}));
