@@ -44,6 +44,7 @@ import {
 import {
 	TIER_LEVELS,
 	applyTierConfigChange,
+	resolveModel,
 	type TierConfig,
 	type TierConfigChange,
 	type TierLevel,
@@ -190,7 +191,8 @@ const MENU_VISIBLE_ROWS = 10;
 
 async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 	const ui = ctx.ui;
-	let config = buildModelContext(ctx).tierConfig;
+	const modelContext = buildModelContext(ctx);
+	let config = modelContext.tierConfig;
 	const options = catalogOptions(ctx);
 
 	const explicitTiers = () => TIER_LEVELS.filter((l) => config?.[l]).map((l) => `${l}: ${config?.[l]}`);
@@ -199,6 +201,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 		const tui = _tui;
 		const container = new Container();
 		const listHost = new Container();
+		const previewHost = new Container();
 		// Mirror of the SettingsList highlight (its selectedIndex is private);
 		// kept in sync by intercepting up/down with the same wrap semantics.
 		let selectedIndex = 0;
@@ -214,6 +217,30 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 			for (let i = 0; i < selectedIndex; i++) list.handleInput("\x1b[B"); // down
 			listHost.clear();
 			listHost.addChild(list);
+		};
+
+		const rebuildPreview = () => {
+			previewHost.clear();
+			for (const level of TIER_LEVELS) {
+				const explicit = config?.[level];
+				const resolution = resolveModel({
+					callTier: level,
+					tierConfig: config,
+					defaultModel: modelContext.defaultModel,
+					catalog: modelContext.catalog,
+				});
+				const model = resolution.model ?? modelContext.defaultModel;
+				let source = "default";
+				if (explicit) source = "explicit";
+				else if (config?.auto) source = resolution.model ? "auto" : "auto → default fallback";
+				const assignment = model ?? "parent default (unknown)";
+				const note = resolution.note ? ` — ${resolution.note}` : "";
+				previewHost.addChild(new Text(
+					theme.fg("dim", `  ${level.padEnd(8)} ${assignment}  (${source})${note}`),
+					1,
+					0,
+				));
+			}
 		};
 
 		const buildSettingsList = () => {
@@ -252,6 +279,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 				config = next;
 				// Toggling auto adds/removes the tier rows — rebuild the menu.
 				if (id === AUTO_ID) rebuildMenu();
+				rebuildPreview();
 				tui.requestRender();
 			}, () => done(true));
 		};
@@ -261,6 +289,9 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 		container.addChild(new Text(theme.fg("dim", "ctrl+alt+l: clear the highlighted tier's model"), 1, 0));
 		listHost.addChild(buildSettingsList());
 		container.addChild(listHost);
+		container.addChild(new Text(theme.fg("accent", theme.bold("Effective assignments")), 1, 0));
+		rebuildPreview();
+		container.addChild(previewHost);
 		container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
 
 		return {
@@ -281,6 +312,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 						// Refresh the row so the tier shows "auto" again, keeping the
 						// cursor on the same (now cleared) tier row.
 						rebuildMenu();
+						rebuildPreview();
 					}
 					tui.requestRender();
 					return;
