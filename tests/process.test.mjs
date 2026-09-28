@@ -381,7 +381,7 @@ test("single job pauses and resumes twice on the same task ID and transcript; a 
 		const taskId = first.id;
 		const waiter = waitForTask(taskId);
 		pauseJobTasks(job);
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await waitUntil(() => first.status === "paused" && !first.finalizing);
 		assert.equal(first.status, "paused");
 		const taskFile = first.sessionFile;
 		assert.ok(taskFile);
@@ -404,7 +404,7 @@ test("single job pauses and resumes twice on the same task ID and transcript; a 
 			assert.equal(child.args[child.args.indexOf("--session") + 1], taskFile);
 			if (resumeNumber === 0) {
 				pauseJobTasks(job);
-				await new Promise((resolve) => setTimeout(resolve, 10));
+				await waitUntil(() => job.tasks[0].status === "paused" && !job.tasks[0].finalizing);
 				assert.equal(job.tasks[0].status, "paused");
 			} else {
 				child.proc.exitCode = 0;
