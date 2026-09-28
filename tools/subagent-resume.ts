@@ -9,6 +9,7 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { boundOutput } from "../output.ts";
 import { discoverUserAgents } from "../agents.ts";
 import {
 	buildModelContext,
@@ -19,6 +20,7 @@ import {
 } from "../jobs.ts";
 import { waitForJobOrKill } from "../process.ts";
 import { getParentSessionId, toTaskInfo, type ToolDetails } from "../runtime.ts";
+import { reportTaskUsage } from "../usage.ts";
 
 const subagentResumeParams = Type.Object({
 	jobId: Type.Optional(
@@ -51,10 +53,10 @@ export const subagentResumeTool = defineTool<typeof subagentResumeParams, ToolDe
 
 	async execute(_toolCallId, params, signal, onUpdate, ctx) {
 		if (params.jobId === undefined) {
-			const text = [
+			const text = boundOutput([
 				`Subagent jobs for session ${getParentSessionId() ?? "(unknown)"}:`,
 				formatJobListings(listJobsForCurrentSession()),
-			].join("\n");
+			].join("\n"));
 			return { content: [{ type: "text", text }], details: { mode: "collect", jobIds: [], tasks: [] } };
 		}
 
@@ -74,36 +76,27 @@ export const subagentResumeTool = defineTool<typeof subagentResumeParams, ToolDe
 			emit,
 			signal: wait ? signal : undefined,
 		});
-		if (error || !job) {
-			return {
-				content: [{ type: "text", text: error ?? "Resume failed." }],
-				details: { mode: "collect", jobIds: [params.jobId], tasks: [] },
-				isError: true,
-			};
-		}
+		if (error || !job) throw new Error(`${error ?? "Resume failed."} Job id: ${params.jobId}. Check subagent_status or list jobs with subagent_resume.`);
 		const note = notes?.length ? `\n\nNotes:\n- ${notes.join("\n- ")}` : "";
 		if (!wait) {
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Resumed job ${job.id} in the background.${note}\n\nThey will run in the background while you continue working. Collect with subagent_wait (jobId: ${job.id}).`,
+						text: boundOutput(`Resumed job ${job.id} in the background.${note}\n\nThey will run in the background while you continue working. Collect with subagent_wait (jobId: ${job.id}).`),
 					},
 				],
 				details: { mode: job.mode, jobIds: [job.id], tasks: job.tasks.map(toTaskInfo) },
 			};
 		}
 		const completed = await waitForJobOrKill(job.id, signal);
-		const { text } = collectResultText([job.id]);
+		const { text, anyFailed } = collectResultText([job.id]);
+		if (!completed) throw new Error(`Resume of job ${job.id}: ${job.status}: ${job.errorMessage || "aborted"}. Continue with subagent_resume { jobId: "${job.id}" } or inspect with subagent_status.`);
+		if (anyFailed || job.status !== "completed") throw new Error(boundOutput(`${text || `Resume of job ${job.id}: ${job.status}: ${job.errorMessage || "failed"}`}\n\nJob ${job.id} still has failed tasks. Inspect with subagent_status; resumable tasks can be resumed with subagent_resume { jobId: "${job.id}" }.`));
 		return {
-			content: [
-				{
-					type: "text",
-					text: completed ? `${text}${note}` : `Resume of job ${job.id}: ${job.status}: ${job.errorMessage || "(aborted)"}`,
-				},
-			],
+			content: [{ type: "text", text: boundOutput(`${text}${note}`, { artifactPath: job.tasks.find((task) => task.outputPath)?.outputPath }) }],
 			details: { mode: "collect", jobIds: [job.id], tasks: job.tasks.map(toTaskInfo) },
-			isError: !completed,
+			usage: await reportTaskUsage(job.tasks),
 		};
 	},
 

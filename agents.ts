@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseAgentMarkdown, planAgentSeeds, type AgentSummary } from "./core.ts";
+import { seedBundledAgentFiles } from "./agent-seeding.ts";
 
 /** Directory containing user agent definitions: `~/.pi/agent/agents`. */
 export function getUserAgentsDir(): string {
@@ -65,17 +66,7 @@ export function seedBundledAgents(): string[] {
 	);
 	if (missing.length === 0) return [];
 
-	fs.mkdirSync(userDir, { recursive: true });
-	const seeded: string[] = [];
-	for (const name of missing) {
-		try {
-			fs.copyFileSync(path.join(bundledDir, `${name}.md`), path.join(userDir, `${name}.md`));
-			seeded.push(name);
-		} catch {
-			/* ignore: read-only user dir or missing file */
-		}
-	}
-	return seeded;
+	return seedBundledAgentFiles(bundledDir, userDir, missing);
 }
 
 /** Discover all valid user agents, sorted by name. */

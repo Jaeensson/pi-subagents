@@ -6,6 +6,8 @@
  * TypeScript syntax only (no enums, no parameter properties).
  */
 
+import { boundOutput, truncateUtf8 } from "./output.ts";
+
 export const DEFAULT_OUTPUT_CAP_BYTES = 50 * 1024;
 export const NOTIFICATION_PREVIEW_BYTES = 200;
 
@@ -86,6 +88,7 @@ export interface MessageLike {
 	stopReason?: string;
 	errorMessage?: string;
 	model?: string;
+	provider?: string;
 	toolName?: string;
 }
 
@@ -249,20 +252,49 @@ export function familyStem(id: string): string {
  * catalog has exactly one match, and returns undefined when the pin must be
  * dropped (ambiguous or unknown) so tier/default resolution takes over.
  */
-export function safeModelPin(model: string | undefined, catalog: CatalogModel[]): string | undefined {
+function findQualifiedCatalogModel(model: string, catalog: CatalogModel[]): CatalogModel | undefined {
+	const slash = model.indexOf("/");
+	if (slash <= 0) return undefined;
+	return catalog.find((entry) => entry.provider === model.slice(0, slash) && entry.id === model.slice(slash + 1));
+}
+
+function findDefaultCatalogModel(
+	model: string | undefined,
+	provider: string | undefined,
+	catalog: CatalogModel[],
+): CatalogModel | undefined {
+	if (!model) return undefined;
+	const qualified = findQualifiedCatalogModel(model, catalog);
+	if (qualified) return qualified;
+	if (provider) {
+		const scoped = catalog.find((entry) => entry.provider === provider && entry.id === model);
+		if (scoped) return scoped;
+	}
+	const matches = catalog.filter((entry) => entry.id === model);
+	return matches.length === 1 ? matches[0] : undefined;
+}
+
+function qualifyDefault(model: string | undefined, provider: string | undefined): string | undefined {
 	if (!model) return undefined;
 	if (model.includes("/")) return model;
+	return provider ? `${provider}/${model}` : model;
+}
+
+export function safeModelPin(model: string | undefined, catalog: CatalogModel[]): string | undefined {
+	if (!model) return undefined;
+	const qualified = findQualifiedCatalogModel(model, catalog);
+	if (qualified) return `${qualified.provider}/${qualified.id}`;
 	const matches = catalog.filter((m) => m.id === model);
-	return matches.length === 1 ? `${matches[0].provider}/${model}` : undefined;
+	return matches.length === 1 ? `${matches[0].provider}/${matches[0].id}` : undefined;
 }
 
 export function pickAutoTier(
 	level: "fast" | "deep",
-	options: { defaultModel?: string; catalog: CatalogModel[] },
+	options: { defaultModel?: string; defaultProvider?: string; catalog: CatalogModel[] },
 ): AutoPick {
-	const { defaultModel, catalog } = options;
+	const { defaultModel, defaultProvider, catalog } = options;
 	if (!defaultModel) return {};
-	const def = catalog.find((m) => m.id === defaultModel);
+	const def = findDefaultCatalogModel(defaultModel, defaultProvider, catalog);
 	if (!def) return {};
 	const qualified = (m: CatalogModel) => `${m.provider}/${m.id}`;
 	const family = catalog.filter(
@@ -298,11 +330,9 @@ export function resolveContextWindow(
 	catalog: CatalogModel[],
 ): number | undefined {
 	if (!model) return undefined;
-	const slash = model.indexOf("/");
-	const entry =
-		slash > 0
-			? catalog.find((m) => m.provider === model.slice(0, slash) && m.id === model.slice(slash + 1))
-			: catalog.find((m) => m.id === model);
+	const qualified = findQualifiedCatalogModel(model, catalog);
+	const matches = catalog.filter((m) => m.id === model);
+	const entry = qualified ?? (matches.length === 1 ? matches[0] : undefined);
 	const window = entry?.contextWindow;
 	return window && window > 0 ? window : undefined;
 }
@@ -321,21 +351,22 @@ export function resolveModel(options: {
 	agentTier?: string;
 	tierConfig?: TierConfig;
 	defaultModel?: string;
+	defaultProvider?: string;
 	catalog: CatalogModel[];
 }): ModelResolution {
-	const { callTier, agentTier, tierConfig, defaultModel, catalog } = options;
+	const { callTier, agentTier, tierConfig, defaultModel, defaultProvider, catalog } = options;
 	const notes: string[] = [];
 	const pushNote = (text: string) => {
 		if (!notes.includes(text)) notes.push(text);
 	};
 
 	if (isTierLevel(callTier)) {
-		const resolved = resolveTier(callTier, tierConfig, defaultModel, catalog, notes);
+		const resolved = resolveTier(callTier, tierConfig, defaultModel, defaultProvider, catalog, notes);
 		if (resolved) return { model: resolved, tierUsed: callTier, note: notes.join("; ") || undefined };
 		pushNote(`tier "${callTier}" could not be resolved; falling back`);
 	}
 	if (isTierLevel(agentTier)) {
-		const resolved = resolveTier(agentTier, tierConfig, defaultModel, catalog, notes);
+		const resolved = resolveTier(agentTier, tierConfig, defaultModel, defaultProvider, catalog, notes);
 		if (resolved) return { model: resolved, tierUsed: agentTier, note: notes.join("; ") || undefined };
 		pushNote(`tier "${agentTier}" could not be resolved; falling back`);
 	}
@@ -346,17 +377,20 @@ function resolveTier(
 	level: TierLevel,
 	tierConfig: TierConfig | undefined,
 	defaultModel: string | undefined,
+	defaultProvider: string | undefined,
 	catalog: CatalogModel[],
 	notes: string[],
 ): string | undefined {
 	if (tierConfig?.[level]) return tierConfig[level];
 	if (!tierConfig?.auto) return undefined;
 	if (level === "balanced") {
-		const def = catalog.find((m) => m.id === defaultModel);
-		return def ? `${def.provider}/${def.id}` : defaultModel;
+		const def = findDefaultCatalogModel(defaultModel, defaultProvider, catalog);
+		return def ? `${def.provider}/${def.id}` : qualifyDefault(defaultModel, defaultProvider);
 	}
 	if (!defaultModel) return undefined;
-	const picked = pickAutoTier(level, { defaultModel, catalog });
+	const def = findDefaultCatalogModel(defaultModel, defaultProvider, catalog);
+	if (!def) return undefined;
+	const picked = pickAutoTier(level, { defaultModel: def.id, defaultProvider: def.provider, catalog });
 	if (picked.model) {
 		if (picked.collapsed) {
 			notes.push(
@@ -494,34 +528,45 @@ export function buildChildArgs(options: {
 /** Parse one line of the child's JSON-mode stdout into the task state. */
 export function applyEventLine(line: string, state: TaskResultState): void {
 	if (!line.trim()) return;
-	let event: { type?: string; message?: MessageLike };
+	let event: unknown;
 	try {
 		event = JSON.parse(line);
 	} catch {
 		return;
 	}
-	if (!event.message) return;
+	if (!event || typeof event !== "object" || Array.isArray(event)) return;
+	const envelope = event as Record<string, unknown>;
+	const rawMessage = envelope.message;
+	if (envelope.type !== "message_end" || !rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) return;
+	const msg = rawMessage as MessageLike;
+	if (typeof msg.role !== "string" || !Array.isArray(msg.content)) return;
 
-	const msg = event.message;
-
-	if (event.type === "message_end" && msg.role === "assistant") {
+	if (msg.role === "assistant") {
 		state.messages.push(msg);
 		state.usage.turns++;
-		const usage = msg.usage;
+		const usage = msg.usage && typeof msg.usage === "object" ? msg.usage : undefined;
 		if (usage) {
-			state.usage.input += usage.input || 0;
-			state.usage.output += usage.output || 0;
-			state.usage.cacheRead += usage.cacheRead || 0;
-			state.usage.cacheWrite += usage.cacheWrite || 0;
-			state.usage.cost += usage.cost?.total || 0;
-			state.usage.contextTokens = usage.totalTokens || 0;
+			state.usage.input += finiteNumber(usage.input);
+			state.usage.output += finiteNumber(usage.output);
+			state.usage.cacheRead += finiteNumber(usage.cacheRead);
+			state.usage.cacheWrite += finiteNumber(usage.cacheWrite);
+			state.usage.cost += finiteNumber(usage.cost?.total);
+			state.usage.contextTokens = finiteNumber(usage.totalTokens);
 		}
-		if (msg.model) state.model = msg.model;
-		if (msg.stopReason) state.stopReason = msg.stopReason;
-		if (msg.errorMessage) state.errorMessage = msg.errorMessage;
-	} else if (event.type === "tool_result_end") {
+		if (typeof msg.model === "string" && msg.model) {
+			state.model = typeof msg.provider === "string" && msg.provider
+				? `${msg.provider}/${msg.model}`
+				: msg.model;
+		}
+		if (typeof msg.stopReason === "string" && msg.stopReason) state.stopReason = msg.stopReason;
+		if (typeof msg.errorMessage === "string" && msg.errorMessage) state.errorMessage = msg.errorMessage;
+	} else if (msg.role === "toolResult") {
 		state.messages.push(msg);
 	}
+}
+
+function finiteNumber(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 // ── Output extraction ────────────────────────────────────────────────────────
@@ -530,10 +575,11 @@ export function getFinalOutput(messages: MessageLike[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
-		for (let j = msg.content.length - 1; j >= 0; j--) {
-			const part = msg.content[j];
-			if (part.type === "text" && part.text) return part.text;
-		}
+		if (!Array.isArray(msg.content)) return "";
+		return msg.content
+			.filter((part) => part?.type === "text" && typeof part.text === "string")
+			.map((part) => part.text)
+			.join("");
 	}
 	return "";
 }
@@ -650,26 +696,13 @@ export function getResultOutput(result: {
 
 /** Byte-based truncation that never splits multi-byte characters. */
 export function truncateOutput(output: string, capBytes: number = DEFAULT_OUTPUT_CAP_BYTES): string {
-	const byteLength = Buffer.byteLength(output, "utf8");
-	if (byteLength <= capBytes) return output;
-
-	let kept = "";
-	for (const ch of output) {
-		const next = kept + ch;
-		if (Buffer.byteLength(next, "utf8") > capBytes) break;
-		kept = next;
-	}
-	const keptBytes = Buffer.byteLength(kept, "utf8");
-	const omitted = byteLength - keptBytes;
-	return `${kept}\n\n[Output truncated: ${omitted} bytes omitted. Full output preserved in tool details.]`;
+	return boundOutput(output, { maxBytes: capBytes, maxLines: Number.MAX_SAFE_INTEGER });
 }
 
 /** Cap a one-line preview (e.g. in completion notifications). */
 export function previewLine(text: string, maxBytes: number = NOTIFICATION_PREVIEW_BYTES): string {
 	const singleLine = text.replace(/\s+/g, " ").trim();
-	const truncated = truncateOutput(singleLine, maxBytes);
-	if (truncated !== singleLine) return `${truncated}…`;
-	return singleLine;
+	return truncateUtf8(singleLine, maxBytes, "…");
 }
 
 /** First line of a multi-line string (for single-line previews, e.g. commands in the status widget). */
@@ -854,30 +887,33 @@ export function formatStatusReport(
 		tierUsed?: string;
 		tierNote?: string;
 		errorMessage?: string;
+		outputPath?: string;
 	}>,
-	opts: { maxOutputBytes?: number } = {},
+	opts: { maxOutputBytes?: number; maxOutputLines?: number } = {},
 ): string {
-	const maxOutputBytes = opts.maxOutputBytes ?? 4000;
+	const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_OUTPUT_CAP_BYTES;
 	const sections = tasks.map((t) => {
 		const icon = statusIcon(t.status);
 		const lines = [
 			`### [${t.agent}${t.name ? `/${t.name}` : ""}] ${icon} ${t.status} — id: ${t.id}`,
 			`Task: ${t.task}`,
 		];
-		if (t.status === "running") {
-			lines.push("(running, no output yet)");
-		} else {
-			const usageStr = formatUsageStats(t.usage, t.model, t.tierUsed);
-			if (usageStr) lines.push(usageStr);
-			if (t.tierNote) lines.push(`Note: ${t.tierNote}`);
-			if (t.status !== "completed") {
-				lines.push(`Error: ${t.errorMessage || "(no error message)"}`);
-			}
-			const output = getFinalOutput(t.messages);
-			if (output) lines.push(truncateOutput(output, maxOutputBytes));
+		const usageStr = formatUsageStats(t.usage, t.model, t.tierUsed);
+		if (usageStr) lines.push(usageStr);
+		if (t.tierNote) lines.push(`Note: ${t.tierNote}`);
+		if (t.status !== "running" && t.status !== "completed") {
+			lines.push(`Error: ${t.errorMessage || "(no error message)"}`);
 		}
+		const output = getFinalOutput(t.messages);
+		if (output) lines.push(output);
+		else if (t.status === "running") lines.push("(running, no visible output yet)");
+		if (t.outputPath) lines.push(`Full output: ${t.outputPath}`);
 		return lines.join("\n");
 	});
 
-	return sections.join("\n\n---\n\n");
+	return boundOutput(sections.join("\n\n---\n\n"), {
+		maxBytes: maxOutputBytes,
+		maxLines: opts.maxOutputLines ?? 2000,
+		artifactPath: tasks.find((task) => task.outputPath)?.outputPath,
+	});
 }

@@ -203,8 +203,9 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 		const listHost = new Container();
 		const previewHost = new Container();
 		// Mirror of the SettingsList highlight (its selectedIndex is private);
-		// kept in sync by intercepting up/down with the same wrap semantics.
+		// kept in sync by intercepting main-menu up/down with the same wrap semantics.
 		let selectedIndex = 0;
+		let submenuOpen = false;
 		const itemCount = () => (config?.auto === true ? 1 : 1 + TIER_LEVELS.length);
 
 		// A rebuilt SettingsList starts with its cursor on row 0. Re-apply the
@@ -264,7 +265,10 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 							currentValue: config?.[level] ?? "auto",
 							description: `Explicit model for "${level}" tasks · enter: pick model · ctrl+alt+l: clear`,
 							submenu: (_current, submenuDone) =>
-								new ModelPickerComponent(tui, theme, level, config?.[level] ?? "auto", options, submenuDone),
+								new ModelPickerComponent(tui, theme, level, config?.[level] ?? "auto", options, (value) => {
+									submenuOpen = false;
+									submenuDone(value);
+								}),
 						}))),
 			];
 			return new SettingsList(items, MENU_VISIBLE_ROWS, getSettingsListTheme(), (id, value) => {
@@ -298,7 +302,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 			render: (width: number) => container.render(width),
 			invalidate: () => container.invalidate(),
 			handleInput: (data: string) => {
-				if (matchesKey(data, CLEAR_TIER)) {
+				if (!submenuOpen && matchesKey(data, CLEAR_TIER)) {
 					const level = selectedIndex > 0 && config?.auto !== true ? TIER_LEVELS[selectedIndex - 1] : undefined;
 					if (!level) {
 						ui.notify("Highlight a tier row (fast/balanced/deep) to clear it.", "info");
@@ -317,12 +321,20 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 					tui.requestRender();
 					return;
 				}
-				// Track the highlight so ctrl+alt+l knows which tier to clear.
 				const kb = getKeybindings();
+				if (submenuOpen) {
+					// SettingsList owns submenu navigation. Its arrows must never alter
+					// the main-menu highlight used by ctrl+alt+l.
+					listHost.children[0]?.handleInput?.(data);
+					tui.requestRender();
+					return;
+				}
 				if (kb.matches(data, "tui.select.up")) {
 					selectedIndex = selectedIndex === 0 ? itemCount() - 1 : selectedIndex - 1;
 				} else if (kb.matches(data, "tui.select.down")) {
 					selectedIndex = selectedIndex === itemCount() - 1 ? 0 : selectedIndex + 1;
+				} else if (kb.matches(data, "tui.select.confirm") && selectedIndex > 0 && config?.auto !== true) {
+					submenuOpen = true;
 				}
 				listHost.children[0]?.handleInput?.(data);
 				tui.requestRender();
@@ -338,8 +350,8 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("subagents", {
 		description: "Subagent model tier settings (auto toggle + per-tier models)",
 		handler: async (_args, ctx) => {
-			if (!ctx.hasUI) {
-				ctx.ui.notify("/subagents needs an interactive UI (unavailable in this mode).", "warning");
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("/subagents requires TUI mode; its settings dialog is terminal-only.", "warning");
 				return;
 			}
 			await runDialog(ctx);

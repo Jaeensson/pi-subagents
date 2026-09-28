@@ -28,13 +28,7 @@ export const subagentPauseTool = defineTool<typeof subagentPauseParams, ToolDeta
 
 	async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 		const found = pauseJob(params.jobId);
-		if (!found) {
-			return {
-				content: [{ type: "text", text: `Unknown job id (not found in this session): ${params.jobId}` }],
-				details: { mode: "collect", jobIds: [params.jobId], tasks: [] },
-				isError: true,
-			};
-		}
+		if (!found) throw new Error(`Unknown job id (not found in this session): ${params.jobId}. Use a jobId returned by subagent (wait: false), or restore persisted work with subagent_resume.`);
 		const lines = found.paused.length
 			? found.paused.map((t) => `- ⏸ [${displayAgentName(t.agent)}${t.name ? `/${t.name}` : ""}] ${t.id}`)
 			: ["(no running tasks — nothing to pause)"];

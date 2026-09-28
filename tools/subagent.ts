@@ -8,6 +8,8 @@
  */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import { boundOutput } from "../output.ts";
+import { randomUUID } from "node:crypto";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { discoverUserAgents, getUserAgentsDir } from "../agents.ts";
@@ -20,12 +22,12 @@ import {
 	resolveAgent,
 	shouldNotify,
 	statusIcon,
-	truncateOutput,
 } from "../core.ts";
-import { buildModelContext, createJob, mapWithConcurrencyLimit, MAX_CONCURRENCY, runChain, spawnResultText } from "../jobs.ts";
-import { killTask, spawnTask, waitForJobOrKill } from "../process.ts";
-import { aggregateUsage, jobDetails, getParentSessionId, getJobsRoot, waitForTask, type TaskInfo, type ToolDetails } from "../runtime.ts";
+import { buildModelContext, createJob, persistChainSteps, runChain, spawnResultText, taskResultText } from "../jobs.ts";
+import { holdTaskDispatch, spawnTask, waitForJobOrKill } from "../process.ts";
+import { aggregateUsage, jobDetails, getParentSessionId, getJobsRoot, type TaskInfo, type ToolDetails } from "../runtime.ts";
 import { getDisplayItems, renderTaskList } from "../tui.ts";
+import { reportTaskUsage } from "../usage.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const COLLAPSED_ITEM_COUNT = 10;
@@ -123,12 +125,18 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 		const hasSingle = params.task !== undefined || params.agent !== undefined;
 		const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
 
+		if (params.tasks?.length === 0 || params.chain?.length === 0) {
+			throw new Error("Invalid parameters: tasks and chain arrays must not be empty. Provide one single, parallel, or chain mode.");
+		}
 		if (modeCount !== 1) {
 			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
-			return {
-				content: [{ type: "text", text: `Invalid parameters: provide exactly one mode (single, parallel, or chain).\nAvailable agents: ${available}\nRaw prompts: omit the agent field to use the built-in default agent.` }],
-				details: { mode: "single" as const, jobIds: [], tasks: [] },
-			};
+			throw new Error(`Invalid parameters: provide exactly one mode (single, parallel, or chain).\nAvailable agents: ${available}\nRaw prompts: omit the agent field to use the built-in default agent.`);
+		}
+		if (hasSingle && (!params.task || params.task.trim().length === 0)) {
+			throw new Error("Missing task: provide a non-empty task string for single mode.");
+		}
+		if (hasTasks && params.tasks!.length > MAX_PARALLEL_TASKS) {
+			throw new Error(`Too many parallel tasks (${params.tasks!.length}). Max is ${MAX_PARALLEL_TASKS}; split the work across multiple subagent calls.`);
 		}
 
 		// Pre-validate agents so we never spawn a partial batch with an unknown agent.
@@ -136,19 +144,21 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 		if (params.agent !== undefined && !resolveAgent(params.agent, agents)) unknownAgents.add(params.agent);
 		if (params.tasks) for (const t of params.tasks) if (t.agent !== undefined && !resolveAgent(t.agent, agents)) unknownAgents.add(t.agent);
 		if (params.chain) for (const c of params.chain) if (c.agent !== undefined && !resolveAgent(c.agent, agents)) unknownAgents.add(c.agent);
+		for (const item of [...(params.tasks ?? []), ...(params.chain ?? [])]) {
+			if (typeof item.task !== "string" || item.task.trim().length === 0) throw new Error("Missing task: every parallel task and chain step must have a non-empty task string.");
+		}
 		if (unknownAgents.size > 0) {
 			const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
-			return {
-				content: [{ type: "text", text: `Unknown agent(s): ${Array.from(unknownAgents).join(", ")}. Available agents: ${available}.` }],
-				details: { mode: "single" as const, jobIds: [], tasks: [] },
-				isError: true,
-			};
+			throw new Error(`Unknown agent(s): ${Array.from(unknownAgents).join(", ")}. Available agents: ${available}. Call subagent_agents to list agents or omit agent to use the built-in default.`);
 		}
 
 		// Durable persistence: bind the job to this parent session's store bucket.
 		const persist =
 			getParentSessionId() && getJobsRoot()
-				? { parentSessionId: getParentSessionId()!, chain: hasChain ? params.chain : undefined }
+				? {
+					parentSessionId: getParentSessionId()!,
+					chain: hasChain ? persistChainSteps(params.chain!, params.cwd ?? ctx.cwd) : undefined,
+				}
 				: undefined;
 
 		// ── Chain mode ──
@@ -159,57 +169,42 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 				return { content: [{ type: "text", text: spawnResultText(job, "chain") }], details: jobDetails(job) };
 			}
 			const completed = await waitForJobOrKill(job.id, signal);
-			if (!completed) {
-				return {
-					content: [{ type: "text", text: `Chain ${job.status}: ${job.errorMessage || "(aborted)"}` }],
-					details: jobDetails(job),
-					isError: true,
-				};
-			}
+			if (!completed) throw new Error(`Chain ${job.status}: ${job.errorMessage || "aborted"} (job ${job.id}). Resume or collect with subagent_resume { jobId: "${job.id}" }.`);
 			const last = job.tasks[job.tasks.length - 1];
-			if (job.status === "failed" || job.status === "interrupted") {
-				return {
-					content: [{ type: "text", text: job.errorMessage || "Chain failed." }],
-					details: jobDetails(job),
-					isError: true,
-				};
+			if (job.status !== "completed") {
+				throw new Error(boundOutput(`${job.errorMessage || "Chain failed."} (job ${job.id}). Recover with subagent_resume { jobId: "${job.id}" }.`, { artifactPath: job.tasks.find((t) => t.outputPath)?.outputPath }));
 			}
 			return {
-				content: [{ type: "text", text: getFinalOutput(last?.messages ?? []) || "(no output)" }],
+				content: [{ type: "text", text: last ? taskResultText(last, getFinalOutput(last.messages) || "(no output)") : "(no output)" }],
 				details: jobDetails(job),
+				usage: await reportTaskUsage(job.tasks),
 			};
 		}
 
 		// ── Parallel mode ──
 		if (hasTasks) {
 			const tasksParam = params.tasks!;
-			if (tasksParam.length > MAX_PARALLEL_TASKS) {
-				return {
-					content: [{ type: "text", text: `Too many parallel tasks (${tasksParam.length}). Max is ${MAX_PARALLEL_TASKS}.` }],
-					details: { mode: "parallel" as const, jobIds: [], tasks: [] },
-				};
-			}
 			const job = createJob("parallel", shouldNotify(wait, notifyOnComplete), emit, undefined, persist);
-			if (wait) {
-				await mapWithConcurrencyLimit(tasksParam, MAX_CONCURRENCY, async (t) => {
-					const agent = resolveAgent(t.agent, agents)!;
-					const task = await spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, { tier: t.tier, name: t.name, modelCtx });
-					const completed = await waitForTask(task.id, { signal });
-					if (!completed && signal?.aborted) {
-						killTask(task);
-						await waitForTask(task.id, {});
-					}
+			const releaseDispatch = holdTaskDispatch();
+			const planned = tasksParam.map((t) => ({ ...t, taskId: randomUUID() }));
+			const spawnPromises = planned.map(async (t) => {
+				const agent = resolveAgent(t.agent, agents)!;
+				return spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, {
+					taskId: t.taskId, requestedTier: t.tier, tier: t.tier, name: t.name, modelCtx,
 				});
-				if (signal?.aborted) {
-					return {
-						content: [{ type: "text", text: "Parallel run aborted." }],
-						details: jobDetails(job),
-						isError: true,
-					};
-				}
+			});
+			try {
+				await Promise.all(spawnPromises);
+				// The hold has recorded every task before any child starts. If the
+				// caller canceled during setup, cancel queued work before releasing it.
+				if (wait && signal?.aborted) await waitForJobOrKill(job.id, signal);
+			} finally { releaseDispatch(); }
+			if (wait) {
+				const completed = await waitForJobOrKill(job.id, signal);
+				if (!completed) throw new Error(`Parallel run aborted (job ${job.id}). Resume or collect with subagent_resume { jobId: "${job.id}" } or subagent_wait { jobIds: ["${job.id}"] }.`);
 				const successCount = job.tasks.filter((t) => !isFailedState(t) && t.status !== "interrupted").length;
 				const summaries = job.tasks.map((t) => {
-					const output = truncateOutput(getResultOutput(t), 50 * 1024);
+					const output = taskResultText(t);
 					const status = isFailedState(t)
 						? `failed${t.stopReason && t.stopReason !== "end" ? ` (${t.stopReason})` : ""}`
 						: t.status === "interrupted"
@@ -220,15 +215,14 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 				const interruptedNote = job.tasks.some((t) => t.status === "interrupted")
 					? `\n\nInterrupted task(s) can be resumed with subagent_resume (job id: ${job.id}).`
 					: "";
+				if (successCount !== job.tasks.length) {
+					throw new Error(boundOutput(`Parallel job ${job.id}: ${successCount}/${job.tasks.length} tasks succeeded. ${summaries.join("\n\n---\n\n")}${interruptedNote}\nRecover interrupted work with subagent_resume { jobId: "${job.id}" }; collect later with subagent_wait.`, { artifactPath: job.tasks.find((t) => t.outputPath)?.outputPath }));
+				}
 				return {
-					content: [{ type: "text", text: `Parallel: ${successCount}/${job.tasks.length} succeeded\n\n${summaries.join("\n\n---\n\n")}${interruptedNote}` }],
+					content: [{ type: "text", text: boundOutput(`Parallel: ${successCount}/${job.tasks.length} succeeded\n\n${summaries.join("\n\n---\n\n")}${interruptedNote}`, { artifactPath: job.tasks.find((t) => t.outputPath)?.outputPath }) }],
 					details: jobDetails(job),
-					isError: successCount !== job.tasks.length,
+					usage: await reportTaskUsage(job.tasks),
 				};
-			}
-			for (const t of tasksParam) {
-				const agent = resolveAgent(t.agent, agents)!;
-				void spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, { tier: t.tier, name: t.name, modelCtx });
 			}
 			return { content: [{ type: "text", text: spawnResultText(job, "parallel") }], details: jobDetails(job) };
 		}
@@ -241,25 +235,15 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			return { content: [{ type: "text", text: spawnResultText(job, "single") }], details: jobDetails(job) };
 		}
 		const completed = await waitForJobOrKill(job.id, signal);
-		if (!completed) {
-			return {
-				content: [{ type: "text", text: `Subagent ${job.status}: ${job.errorMessage || "(aborted)"}` }],
-				details: jobDetails(job),
-				isError: true,
-			};
-		}
+		if (!completed) throw new Error(`Subagent ${job.status}: ${job.errorMessage || "aborted"} (job ${job.id}). Collect with subagent_wait { jobIds: ["${job.id}"] } or resume with subagent_resume { jobId: "${job.id}" }.`);
 		if (isFailedState(task) || task.status === "interrupted") {
 			const interrupted = task.status === "interrupted";
 			const label = interrupted ? `interrupted (${task.stopReason || "no result"})` : task.stopReason || "failed";
-			const output = interrupted && task.errorMessage ? task.errorMessage : getResultOutput(task);
+			const output = taskResultText(task, interrupted && task.errorMessage ? task.errorMessage : getResultOutput(task));
 			const hint = interrupted ? `\n\nJob ${job.id} was interrupted and is resumable via subagent_resume.` : "";
-			return {
-				content: [{ type: "text", text: `Agent ${label}: ${output}${hint}` }],
-				details: jobDetails(job),
-				isError: true,
-			};
+			throw new Error(boundOutput(`Agent ${label}: ${output}${hint} (job ${job.id}). Resume with subagent_resume { jobId: "${job.id}" } or inspect with subagent_status { jobIds: ["${job.id}"] }.`, { artifactPath: task.outputPath }));
 		}
-		return { content: [{ type: "text", text: getFinalOutput(task.messages) || "(no output)" }], details: jobDetails(job) };
+		return { content: [{ type: "text", text: taskResultText(task, getFinalOutput(task.messages) || "(no output)") }], details: jobDetails(job), usage: await reportTaskUsage(job.tasks) };
 	},
 
 	renderCall(args, theme, _context) {
@@ -305,7 +289,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 				if (!expanded) {
 					const preview = getFinalOutput(t.messages).split("\n").slice(0, 2).join("\n");
 					if (preview) lines.push(theme.fg("toolOutput", preview));
-				}
+				} else if (t.outputPath) lines.push(theme.fg("muted", `Full output: ${t.outputPath}`));
 			}
 			const usageStr = formatUsageStats(aggregateUsage(details.tasks));
 			if (usageStr) lines.push(theme.fg("dim", usageStr));
@@ -328,6 +312,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 				lines.push(renderTaskList(renderItems(t), expanded ? Infinity : 5, theme));
 				const output = getFinalOutput(t.messages);
 				if (expanded && output) lines.push(theme.fg("toolOutput", output));
+				if (expanded && t.outputPath) lines.push(theme.fg("muted", `Full output: ${t.outputPath}`));
 			}
 		} else if (details.mode === "parallel") {
 			const running = details.tasks.filter((t) => t.status === "running").length;
@@ -343,6 +328,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 				lines.push(renderTaskList(renderItems(t), expanded ? Infinity : 5, theme));
 				const output = getFinalOutput(t.messages);
 				if (expanded && output) lines.push(theme.fg("toolOutput", output));
+				if (expanded && t.outputPath) lines.push(theme.fg("muted", `Full output: ${t.outputPath}`));
 			}
 		} else {
 			const t = details.tasks[0];
@@ -358,6 +344,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 				if (expanded) {
 					const output = getFinalOutput(t.messages);
 					if (output) lines.push(theme.fg("toolOutput", output));
+					if (t.outputPath) lines.push(theme.fg("muted", `Full output: ${t.outputPath}`));
 				}
 			}
 		}

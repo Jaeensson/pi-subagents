@@ -1,230 +1,204 @@
 # Subagent Tool for pi
 
-Delegate tasks to specialized subagents with **isolated context windows**. Each
-subagent runs in its own `pi` process, so delegated work never pollutes the
-parent conversation's context.
-
-The parent session can either **wait** for subagents (synchronous) or keep
-**working in parallel** (asynchronous: spawn in the background, collect later).
+Delegate work to specialized subagents with separate context windows. Each
+subagent runs in its own `pi` process, so its conversation does not add to the
+parent's context.
 
 ## Installation
 
-Install as a pi package, then reload pi (`/reload`):
+Install the package and reload pi (`/reload`):
 
 ```bash
 pi install https://github.com/Jaeensson/pi-subagents
 ```
 
-Update with `pi update --extensions` (or `--all`), then `/reload`. For a
-single project only, pass `-l` (writes to `.pi/settings.json`).
+To install for one project only, use `pi install -l` (project packages load
+after project trust is granted). Update with `pi update --extensions` or
+`pi update --all`, then reload. This package registers its extension through
+the `pi.extensions` entry in `package.json`.
 
-Agent definitions live in `~/.pi/agent/agents/*.md` (see
-[Agent definitions](#agent-definitions)).
-
-## Tools
+## Tools and usage
 
 | Tool | Purpose |
 |------|---------|
-| `subagent` | Spawn subagents: single, parallel, or chain. `wait: true` (default) blocks and returns results; `wait: false` spawns in the background and returns a `jobId` immediately. Optional `name` gives the session a human-readable label shown in the status widget. |
-| `subagent_wait` | Block until background subagents finish and return their full results (`{ jobIds, timeoutSeconds? }`). |
-| `subagent_status` | Non-blocking progress check for background subagents (`{ jobIds? }`). Omit `jobIds` to list all jobs for this session, including interrupted jobs from a previous run of it. |
-| `subagent_agents` | List available agent definitions from `~/.pi/agent/agents`. |
-| `subagent_pause` | Gracefully pause a running background job (`{ jobId }`): tasks finalize with their transcripts on disk and can be resumed later. |
-| `subagent_resume` | Resume interrupted/paused jobs from a previous run of THIS session: `{}` lists them; `{ jobId }` continues where the tasks left off. |
+| `subagent` | Run one task, a parallel batch, or a sequential chain. Wait for results or run in the background. |
+| `subagent_wait` | Wait for background jobs and collect their results. |
+| `subagent_status` | Check progress or list jobs belonging to this parent session. |
+| `subagent_agents` | List available agent definitions. |
+| `subagent_pause` | Gracefully pause a background job. |
+| `subagent_resume` | List resumable jobs or continue one belonging to this parent session. |
 
-## Usage
+```text
+# One task; omit agent to use the built-in general-purpose agent
+subagent { agent: "scout", task: "Find the authentication code", wait: true }
 
-```
-# Synchronous — block until done
-Use subagent { agent: "scout", task: "Find all auth code", wait: true }
+# Parallel batch (up to 8 accepted tasks; at most 4 child processes run at once)
+subagent { tasks: [{ agent: "scout", task: "Find models" }, { task: "Find providers" }], wait: true }
 
-# Raw prompt — no agent file needed (built-in default agent)
-Use subagent { task: "Summarize the README", wait: true }
+# Chain; {previous} is replaced with the previous step's full output
+subagent { chain: [{ agent: "scout", task: "Find the read tool" }, { task: "Suggest improvements to {previous}" }] }
 
-# Parallel — multiple agents concurrently (omit agent for the default agent)
-Use subagent { tasks: [{ agent: "scout", task: "Find models" }, { task: "Find providers" }], wait: true }
-
-# Chain — sequential, {previous} placeholder gets the prior step's output (agent optional per step)
-Use subagent { chain: [{ agent: "scout", task: "Find the read tool" }, { task: "Improve it: {previous}" }], wait: true }
-
-# Asynchronous — parent keeps working while subagents run in the background
-# 1. Spawn:   subagent { agent: "scout", task: "...", wait: false }   → returns jobId
-# 2. Later:   subagent_status { jobIds: ["..."] }                     → peek at progress
-# 3. Collect: subagent_wait { jobIds: ["..."] }                       → full results
+# Background work
+subagent { agent: "researcher", task: "Explore the codebase", wait: false }
+subagent_status { }
+subagent_wait { jobIds: ["<jobId>"] }
 ```
 
-### Async details
+Parallel batches accept at most 8 tasks; more than 4 are queued until a
+scheduler slot is available. Queued tasks appear as queued in the live UI. The
+status widget above the input editor shows running tasks, elapsed time, chain
+step, and recent activity. In the TUI, `ctrl+alt+s` opens the live watch pane;
+`↑↓`/`PgUp`/`PgDn` scroll, `Tab` cycles running tasks, `End` returns to the live
+tail, and `Esc` closes it. Both displays are TUI-only.
 
-- When all tasks in a spawned batch finish, the extension injects one compact
-  summary message (`✓ [scout] <preview>` per task). Set `notifyOnComplete:
-  false` to suppress it and poll with `subagent_status` / `subagent_wait`.
-- `subagent_wait` blocks until completion (optionally `timeoutSeconds`);
-  results are cached if the batch already finished. Esc cancels only the wait —
-  background jobs keep running. Esc during a synchronous (`wait: true`) run
-  kills the subagents.
-- Running children are killed on session shutdown (new session, resume, exit),
-  and `pi -p` (print mode) kills them when the prompt completes — async work is
-  tied to the current interactive session.
+With `wait: false`, the call returns a job ID so work can continue in the
+background. When the batch finishes, a compact summary is delivered unless
+`notifyOnComplete: false`; collect full results with `subagent_wait`. Esc while
+waiting for a background job cancels only the wait. Esc during a synchronous
+run aborts its children. Children are terminated during parent-session
+shutdown; a background job is not an independent service.
 
-### Status widget
+### Output size and artifacts
 
-While subagents run, a compact widget above the input editor updates live (1s
-tick), showing agent, elapsed time, chain step, and last activity:
+Tool responses are bounded to **50 KiB and 2,000 lines**. When the final task
+output is larger, the complete text is saved as an output artifact and the
+response includes its path. In a durable job, artifacts are next to the child
+transcripts:
 
+```text
+~/.pi/agent/subagent-jobs/<parent-session-id>/<job-id>/tasks/<task-id>-output.txt
 ```
-⏳ 2 subagents running
-  ▸ scout     12s   → bash: npm test
-  ▸ planner    4s   step 2/3  "Refactor the core loop"
-```
 
-TUI-only — print/JSON modes are unaffected.
+If durable storage is unavailable, the artifact is written to a private
+`pi-subagent-output-*` directory under the operating system's temporary
+directory instead. Use pi's `read` tool with the reported path to inspect the
+full output; the response text and compact live task history are not the full
+artifact. Artifacts in the durable job directory are subject to job retention.
 
-### Watch pane
+## Durability and resume
 
-While subagents run, press `ctrl+alt+s` to open a centered, bordered live
-watch pane showing a subagent's reasoning stream in real time — thinking,
-visible text, tool calls, and in-progress tool output, rendered with the same
-native markdown as the main conversation: headings, lists, tables, and
-syntax-highlighted code blocks (thinking stays italic thinkingText):
+When the parent has a pi session ID and the job store is writable, jobs are
+recorded under
+`~/.pi/agent/subagent-jobs/<parent-session-id>/<job-id>/`. Each job has a
+`manifest.json` and a `tasks/` directory containing child pi session
+transcripts and output artifacts. The manifest is written before child
+launches, and updates use atomic replacement and locking. These writes are
+best-effort: an unavailable or unwritable store falls back to in-memory job
+tracking and may leave no resumable record. This improves recovery but is not a
+guarantee against crashes, storage failure, or power loss.
 
-┌● watching: researcher · 1/2  3m 12s · claude-opus-4-5 · ctx 3.0%/200k┐
-│Let me check where settings are read… (thinking, italic)            │
-│→ grep pattern="modelTiers" in src/                                 │
-│└ pages… done, 1 hit                                                │
-│● live   ↑↓ scroll · PgUp/PgDn · Tab agent · End tail · Esc close   │
-└────────────────────────────────────────────────────────────────────┘
+Jobs belong to the parent pi session that created them. Resuming that session
+surfaces resumable jobs; a new session cannot inspect or resume those jobs
+through the tools. Child transcripts are resumed by their recorded session
+file (`pi --session <file>`), not by creating a fresh child session. Jobs are
+**never resumed automatically**: inspect with `subagent_status` or
+`subagent_resume {}`, then explicitly call `subagent_resume { jobId: "…" }`.
+Completed jobs are terminal; paused, interrupted, and aborted tasks can be
+resumable if their records and transcripts remain available. Failed tasks are
+not resumed. A parallel batch may have partial successes: check
+the job's per-task statuses and collect completed results even if other tasks
+failed or were interrupted.
 
-- `ctrl+alt+s` toggles the pane (TUI only). `↑↓` scroll the retained
-  history, `PgUp`/`PgDn` page, `Tab` cycles running agents, `End` jumps back
-  to the live tail, `Esc` (or the toggle key) closes.
-- The header shows the subagent's context usage (`ctx 3.0%/200k`, updated
-  live like pi's footer: warning above 70%, error above 90%). It is hidden
-  when the child model's context window is unknown.
-- Scrolling up **pins** the viewport: new tokens keep streaming below while
-  the text you're reading stays put; the footer shows `↑ N above` while
-  pinned. Scrolling down to the live edge (or `End`) resumes tailing.
-- The pane does not capture focus — keep typing in the editor while open.
-- A finished selected agent keeps its final view (`✓ done`); the pane closes
-  automatically when the last agent finishes.
-- Reasoning is buffered in memory only (last 64 KB per task) and is never fed
-  back into the conversation or model context; completed results are exactly
-  as before via `subagent_wait` / the completion card.
+During orderly parent-session shutdown, in-flight work is marked interrupted
+on a best-effort basis and owned child processes are terminated. On restart,
+recovery is performed only for the current parent session. A job with a live
+local owner is left alone; an owner recorded on another host is conservatively
+treated as live because its process cannot be checked safely. Such remote-owned
+jobs cannot be reclaimed automatically while that ownership record remains.
 
-## Durability & resume
-
-Subagent work survives session death (crash, power loss, SSH drop, plain
-`/exit`):
-
-- Every child runs with its own pi session under
-  `~/.pi/agent/subagent-jobs/<parent-session-id>/<job-id>/tasks/` — the
-  transcript is durably on disk as the agent works. A small `manifest.json`
-  per job tracks statuses, usage, and final outputs.
-- Jobs are **bound to the parent session**: `pi -c` / `/resume` of that
-  session surfaces an "interrupted jobs" card listing what was mid-flight.
-  A brand-new session never sees another session's jobs.
-- Nothing resumes automatically. Resume on demand with
-  `subagent_resume { jobId }` — interrupted tasks continue from their own
-  transcript (chain jobs pick up at the lowest incomplete step); or inspect
-  first with `subagent_status {}` / `subagent_resume {}`.
-- Pause instead of killing: `subagent_pause { jobId }` gracefully stops the
-  running tasks; resume them any time later.
-- Only `completed` is terminal. Paused, interrupted, and aborted tasks are
-  all resumable while their job exists in the store.
-- Job store retention: `subagent.jobRetentionDays` in settings.json (default
-  7; `0` keeps everything forever).
+Retention is configured in the user-level `~/.pi/agent/settings.json` under
+`subagent.jobRetentionDays` (default `7`; `0` disables cleanup). On pi session
+start, jobs older than the retention period are eligible for cleanup across
+session buckets, except a running job with a live or conservatively presumed
+live owner. Retention is cleanup policy, not archival storage.
 
 ## Agent definitions
 
-`~/.pi/agent/agents/*.md` — markdown with YAML frontmatter and a system prompt
-body:
+Agent definitions live in `~/.pi/agent/agents/*.md` and contain YAML
+frontmatter followed by a system prompt:
 
 ```markdown
 ---
 name: scout
-description: Fast recon agent, read-only
+description: Fast recon agent
 tools: read, grep, find, ls, bash
 tier: fast
 ---
 
-You are a scout agent. Find information quickly and report it compactly.
+Find relevant information quickly and report it compactly.
 ```
 
-- `name` and `description` are required; `tools` (comma-separated), `tier`
-  (`fast` | `balanced` | `deep`), and `extensions` (comma-separated extension
-  specs loaded in the child, e.g. `npm:pi-web-access`) are optional. Omit
-  `tools` for the full default toolset. The frontmatter `model` key is
-  intentionally unsupported — `tier` is the only model control.
-- Omit the agent entirely — in single, parallel, or chain mode — to use the
-  built-in default general-purpose agent (raw prompt mode).
-- **Bundled defaults:** `scout` (tier `fast`), `researcher` (tier `deep`),
-  `worker` (tier `balanced`), and `reviewer` (tier `deep`) ship with the
-  package under `agents/` and are copied into `~/.pi/agent/agents/` on
-  extension load when missing — existing files are never overwritten, so any
-  edits you make win. Delete a seeded agent and it returns on the next
-  reload; rename or customize it to keep your own version. An agent's `tier`
-  is its *default*: a `tier` passed on the call (single/parallel/chain)
-  always overrides it.
-- A sample `planner` agent also ships with pi in
-  `examples/extensions/subagent/agents/` — copy it over if you want it.
+`name` and `description` are required. Optional fields are `tools`
+(comma-separated pi tools), `tier` (`fast`, `balanced`, or `deep`), and
+`extensions` (comma-separated extension package specs, such as
+`npm:pi-web-access`). The `model` frontmatter field is unsupported; use a tier
+instead. Omit `tools` to use the default tool set. If the agent is omitted in a
+tool call, the built-in general-purpose agent is used.
+
+Bundled defaults (`scout`, `researcher`, `worker`, and `reviewer`) are copied
+into the user agent directory when missing. Existing files are never
+overwritten, so local edits take precedence. An agent's tier is its default;
+a tier specified at call time overrides it.
+
+A `tools` allowlist controls which pi tools a child can use, but it cannot
+confine shell commands, filesystem access, or other processes and is **not a
+sandbox**. Agent prompts are instructions, not a security boundary. Children
+run with the parent's operating system permissions and can access the same
+host files and credentials those permissions expose. Only configure agents
+and extensions you trust.
 
 ## Model tiers
 
-`tier: fast | balanced | deep` declares how much capability a task needs
-instead of which model to use. Tiers resolve to concrete models at spawn time
-through a central mapping in pi's `settings.json`:
+Tiers express capability needs rather than a fixed model choice. Configure
+`subagent.modelTiers` in the user-level settings file:
 
 ```json
 {
   "subagent": {
     "modelTiers": {
       "auto": true,
-      "fast": "claude-haiku-4-5",
-      "balanced": "claude-sonnet-4-5",
-      "deep": "claude-opus-4-5"
+      "fast": "anthropic/claude-haiku-4-5",
+      "balanced": "anthropic/claude-sonnet-4-5",
+      "deep": "anthropic/claude-opus-4-5"
     }
   }
 }
 ```
 
-- Set a tier in an agent file (`tier: deep`) and/or pass it per call —
-  `subagent { agent: "scout", task: "...", tier: "fast" }` (also per item in
-  `tasks` and `chain`). Explicit per-tier values always win; `auto` fills only
-  unmapped tiers.
-- Resolution precedence per task: call-time `tier` → agent `tier` → the
-  parent's default model.
-- With `auto: true`, tiers resolve relative to your `defaultModel`: `balanced`
-  is always your default model; `fast` is the cheapest model in the same brand
-  family; `deep` is the priciest family member (never jumping to another
-  vendor's family), collapsing to your default when nothing bigger exists.
-  `enabledModels` scoping is respected, and auto-picked models are passed to
-  subagents provider-qualified to avoid ambiguity.
-- Without any mapping or `auto`, tiers fall back to the parent's default model.
-- The mapping lives in the user-level settings file
-  (`~/.pi/agent/settings.json`); project-local `.pi/settings.json` is not read.
+Explicit per-tier model values take precedence; with `auto: true`, unmapped
+tiers are selected relative to the default model. `balanced` uses the default;
+`fast` picks a cheaper model in the same provider/model family where possible,
+then may fall back to that provider's cheapest model. `deep` picks the priciest
+model in the same family where available, otherwise it collapses to the
+default. Automatically selected models are provider-qualified to disambiguate
+providers that offer the same model ID. The available-model catalog respects
+pi's model scoping (`enabledModels`).
+
+Resolution order is call-time tier, agent-file tier, then the parent's default
+model. An unmapped or unresolved tier falls through to the next level. If no
+tier mapping applies, the child inherits the parent's default model. The
+extension's `/subagents` settings dialog can toggle automatic tiers and choose
+per-tier models.
 
 ## How it works
 
-Each subagent runs `pi --mode json -p --session-dir <tasksDir> --session-id
-<taskId> --no-extensions --no-skills --no-prompt-templates` with the agent's
-system prompt appended and the task as the prompt (resumes use
-`--session <file>` plus a continuation prompt). Children are lean (no
-extension recursion) and read the same user config (model, API keys) as the
-parent. JSON events from the child's stdout are parsed for messages, usage
-(tokens/cost), and errors, while pi itself durably journals the child's
-transcript to the job store. Background jobs are tracked in an in-memory
-registry inside the extension process, mirrored by per-job manifests on disk
-at lifecycle boundaries.
+Children run `pi --mode json -p` with `--no-extensions --no-skills
+--no-prompt-templates`, so extensions are not auto-discovered and recursive
+subagent loading is prevented. Extensions explicitly declared by an agent are
+still passed to that child. Children use the parent's pi configuration and
+credentials; the separate process gives a separate conversation context, not
+an operating-system security boundary.
 
 ## Development
 
+Requires **Node.js >= 22.19.0**. From the repository root:
+
 ```bash
-cd ~/.pi/agent/extensions/subagent
-npm test                    # node:test — pure logic in core.ts (no pi deps needed)
-npm run typecheck           # tsc --noEmit
+npm ci --ignore-scripts
+npm test
+npm run typecheck
 ```
 
-`core.ts` is dependency-free by design and tested with the built-in node test
-runner (Node >= 22.6 type stripping). `node_modules/` contains symlinks into
-the nix-store copy of pi, used only for typechecking — re-link them after a pi
-update. For local development, symlink the repo into
-`~/.pi/agent/extensions/subagent` and `/reload` after changes.
+`npm test` uses Node's built-in test runner. `npm run typecheck` runs `tsc
+--noEmit`. For local development, symlink the repository into
+`~/.pi/agent/extensions/subagent`, then reload pi (`/reload`).

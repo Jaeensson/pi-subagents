@@ -335,9 +335,17 @@ test("pickAutoTier fast collapses when the default is already cheapest", () => {
 	});
 });
 
-test("pickAutoTier returns nothing for missing defaults or unknown models", () => {
+test("pickAutoTier returns nothing for missing, unknown, or provider-ambiguous defaults", () => {
 	assert.deepEqual(pickAutoTier("fast", { defaultModel: undefined, catalog: [] }), {});
 	assert.deepEqual(pickAutoTier("deep", { defaultModel: "llama3.1:8b", catalog: [] }), {});
+	assert.deepEqual(pickAutoTier("fast", {
+		defaultModel: "shared-model",
+		catalog: [
+			{ id: "shared-model", provider: "provider-a", inputCost: 2 },
+			{ id: "shared-cheaper", provider: "provider-a", inputCost: 1 },
+			{ id: "shared-model", provider: "provider-b", inputCost: 3 },
+		],
+	}), {});
 });
 
 // ── Model tiers: resolveModel ────────────────────────────────────────────────
@@ -530,6 +538,7 @@ test("applyEventLine accumulates assistant usage from message_end events", () =>
 			},
 			stopReason: "end",
 			model: "some-model",
+			provider: "test-provider",
 		},
 	});
 	applyEventLine(line, state);
@@ -542,7 +551,7 @@ test("applyEventLine accumulates assistant usage from message_end events", () =>
 	assert.equal(state.usage.contextTokens, 15);
 	assert.equal(state.usage.turns, 1);
 	assert.equal(state.stopReason, "end");
-	assert.equal(state.model, "some-model");
+	assert.equal(state.model, "test-provider/some-model");
 });
 
 test("applyEventLine accumulates usage across multiple assistant messages", () => {
@@ -566,12 +575,12 @@ test("applyEventLine accumulates usage across multiple assistant messages", () =
 	assert.equal(state.usage.turns, 2);
 });
 
-test("applyEventLine records tool results and error messages", () => {
+test("applyEventLine records actual message_end toolResult events and assistant errors", () => {
 	const state = { messages: [], usage: emptyUsage() };
 	applyEventLine(
 		JSON.stringify({
-			type: "tool_result_end",
-			message: { role: "toolResult", content: [{ type: "text", text: "out" }], toolName: "bash" },
+			type: "message_end",
+			message: { role: "toolResult", content: [{ type: "text", text: "out" }], toolName: "bash", toolCallId: "call-1", isError: false },
 		}),
 		state,
 	);
@@ -590,14 +599,17 @@ test("applyEventLine ignores malformed lines and unrelated event types", () => {
 	applyEventLine("not json", state);
 	applyEventLine("", state);
 	applyEventLine(JSON.stringify({ type: "something_else", message: {} }), state);
+	applyEventLine(JSON.stringify({ type: "message_end", message: null }), state);
+	applyEventLine(JSON.stringify({ type: "message_end", message: { role: "assistant", content: {} } }), state);
 	applyEventLine(JSON.stringify({ type: "message_end", message: { role: "user", content: [] } }), state);
+	applyEventLine(JSON.stringify({ type: "tool_result_end", message: { role: "toolResult", content: [] } }), state);
 	assert.equal(state.messages.length, 0);
 	assert.equal(state.usage.turns, 0);
 });
 
 // ── getFinalOutput / isFailedState / getResultOutput ────────────────────────
 
-test("getFinalOutput returns last assistant text part", () => {
+test("getFinalOutput joins every text block in the last assistant message", () => {
 	const messages = [
 		{ role: "assistant", content: [{ type: "text", text: "first" }] },
 		{ role: "toolResult", content: [{ type: "text", text: "tool" }] },
@@ -605,7 +617,8 @@ test("getFinalOutput returns last assistant text part", () => {
 			role: "assistant",
 			content: [
 				{ type: "toolCall", name: "read", arguments: {} },
-				{ type: "text", text: "final answer" },
+				{ type: "text", text: "final " },
+				{ type: "text", text: "answer" },
 			],
 		},
 	];
@@ -643,12 +656,13 @@ test("truncateOutput keeps short output unchanged", () => {
 	assert.equal(truncateOutput(out), out);
 });
 
-test("truncateOutput truncates at byte cap with a note", () => {
+test("truncateOutput keeps the truncation notice within the byte cap", () => {
 	const out = "x".repeat(1000);
 	const result = truncateOutput(out, 100);
-	assert.ok(result.startsWith("x".repeat(100)));
+	assert.ok(Buffer.byteLength(result, "utf8") <= 100);
 	assert.ok(result.includes("[Output truncated:"));
-	assert.ok(result.includes("900 bytes"));
+	assert.match(result, /\d+B/);
+	assert.match(result, /artifact unavailable/);
 });
 
 test("truncateOutput never splits multibyte characters", () => {
@@ -749,7 +763,7 @@ test("resolveContextWindow prefers the qualified match over an unqualified dupli
 		{ id: "same-id", provider: "b", inputCost: 1, contextWindow: 200000 },
 	];
 	assert.equal(resolveContextWindow("b/same-id", catalog), 200000);
-	assert.equal(resolveContextWindow("same-id", catalog), 100000);
+	assert.equal(resolveContextWindow("same-id", catalog), undefined);
 });
 
 // ── formatElapsed ─────────────────────────────────────────────────────────────
@@ -1290,6 +1304,9 @@ test("safeModelPin: qualifies unique bare ids, drops ambiguous/unknown pins", ()
 	assert.equal(safeModelPin(undefined, catalog), undefined);
 	// Already provider-qualified → pass through untouched.
 	assert.equal(safeModelPin("zai/glm-5.3-flash", catalog), "zai/glm-5.3-flash");
+	assert.equal(safeModelPin("provider/model/with/slashes", [
+		{ id: "model/with/slashes", provider: "provider", inputCost: 1 },
+	]), "provider/model/with/slashes");
 	// Bare id, unique provider → qualified pin.
 	assert.equal(safeModelPin("kimi-k2", catalog), "zai/kimi-k2");
 	// Bare id offered by several providers → drop the pin.

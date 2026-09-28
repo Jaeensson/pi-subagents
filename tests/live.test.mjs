@@ -355,6 +355,22 @@ test("tool execution update without partialResult does not blank the segment", (
 	assert.equal(t.segments[t.segments.length - 1].text, "keep");
 });
 
+test("a prolonged multibyte pending stream stays capped and retains a UTF-8-safe tail", () => {
+	let t = emptyLiveTrace();
+	const chunk = "🙂abc".repeat(4096);
+	for (let i = 0; i < 40; i++) {
+		t = reduceLiveEvent(msgu({ type: "thinking_delta", delta: chunk }), t);
+		assert.ok(t.bytes <= LIVE_TRACE_CAP_BYTES);
+	}
+	assert.equal(t.segments.length, 0);
+	assert.ok(t.pending.text.length > 0);
+	assert.ok(Buffer.byteLength(t.pending.text, "utf8") <= LIVE_TRACE_CAP_BYTES);
+	assert.ok(t.pending.text.endsWith(chunk));
+	assert.ok(t.dropped > 0);
+	const lines = traceToLines(t, { width: 80, style: (_color, text) => text, formatToolCall: () => "" });
+	assert.match(lines[0], /earlier segment.*dropped/);
+});
+
 test("ring buffer evicts oldest segments once over the byte cap", () => {
 	let t = emptyLiveTrace();
 	const chunk = "x".repeat(4096);

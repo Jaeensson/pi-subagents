@@ -7,6 +7,13 @@
  */
 
 import { randomUUID } from "node:crypto";
+import {
+	boundOutput,
+	DEFAULT_OUTPUT_CAP_BYTES,
+	DEFAULT_OUTPUT_CAP_LINES,
+	readOutputArtifact,
+	writeOutputArtifact,
+} from "./output.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -16,6 +23,7 @@ import {
 	getFinalOutput,
 	getResultOutput,
 	isFailedState,
+	isResumableStatus,
 	normalizeTierConfig,
 	resolveAgent,
 	safeModelPin,
@@ -30,11 +38,14 @@ import {
 	isResumableJobView,
 	listJobManifests,
 	MANIFEST_VERSION,
+	claimManifest,
+	currentManifestOwner,
 	mergeJobListings,
 	readManifest,
 	resumePlan,
 	upsertManifestTask,
 	toManifestTask,
+	taskSessionDir,
 	updateManifest,
 	writeManifest,
 	type ManifestChainStep,
@@ -42,11 +53,13 @@ import {
 import {
 	blocksResume,
 	checkJobComplete,
+	tasks,
 	emptyUsage,
 	getParentSessionId,
 	getJobsRoot,
 	jobs,
 	waitForTask,
+	waitForTaskOrPause,
 	type Job,
 	type JobMode,
 	type ModelContext,
@@ -60,8 +73,8 @@ export const MAX_CONCURRENCY = 4;
 
 // ── Model tier context ───────────────────────────────────────────────────────
 
-/** Read `subagent.modelTiers` and `defaultModel` from the user's settings.json. */
-function readSettingsFile(): { tierConfig?: TierConfig; defaultModel?: string; jobRetentionDays?: number } {
+/** Read model tiers, defaults, and retention from the user's settings.json. */
+function readSettingsFile(): { tierConfig?: TierConfig; defaultModel?: string; defaultProvider?: string; jobRetentionDays?: number } {
 	let raw: string;
 	try {
 		raw = fs.readFileSync(path.join(getAgentDir(), "settings.json"), "utf-8");
@@ -86,7 +99,11 @@ function readSettingsFile(): { tierConfig?: TierConfig; defaultModel?: string; j
 		tierConfig: normalizeTierConfig(modelTiers),
 		defaultModel:
 			typeof settings.defaultModel === "string" && settings.defaultModel.trim() !== ""
-				? settings.defaultModel
+				? settings.defaultModel.trim()
+				: undefined,
+		defaultProvider:
+			typeof settings.defaultProvider === "string" && settings.defaultProvider.trim() !== ""
+				? settings.defaultProvider.trim()
 				: undefined,
 		jobRetentionDays:
 			typeof rawRetention === "number" && Number.isFinite(rawRetention) && rawRetention >= 0
@@ -154,19 +171,35 @@ export function writeModelTiers(next: TierConfig | undefined): WriteSettingsResu
 /** Build the model context for one tool call from the extension context. */
 export function buildModelContext(ctx: ExtensionContext): ModelContext {
 	const settings = readSettingsFile();
-	const scopedIds = new Set(ctx.scopedModels.map((s) => s.model.id));
+	const scopedModels = new Set(ctx.scopedModels.map((s) => `${s.model.provider}/${s.model.id}`));
 	const catalog: CatalogModel[] = ctx.modelRegistry
 		.getAvailable()
-		.filter((m) => scopedIds.size === 0 || scopedIds.has(m.id))
+		.filter((m) => scopedModels.size === 0 || scopedModels.has(`${m.provider}/${m.id}`))
 		.map((m) => ({ id: m.id, provider: m.provider, inputCost: m.cost.input, contextWindow: m.contextWindow }));
+	const defaultModel = settings.defaultModel ?? ctx.model?.id;
+	const defaultProvider = settings.defaultModel ? settings.defaultProvider : ctx.model?.provider;
+	const matchingDefaults = defaultModel ? catalog.filter((model) => model.id === defaultModel) : [];
+	const inferredProvider = matchingDefaults.length === 1 ? matchingDefaults[0].provider : undefined;
+	const providerForDefault = defaultProvider ?? inferredProvider;
+	const qualifiedDefault = defaultModel && providerForDefault
+		? (defaultModel.startsWith(`${providerForDefault}/`) ? defaultModel : `${providerForDefault}/${defaultModel}`)
+		: defaultModel;
 	return {
 		tierConfig: settings.tierConfig,
-		defaultModel: settings.defaultModel ?? ctx.model?.id,
+		defaultModel: qualifiedDefault,
 		catalog,
 	};
 }
 
 // ── Job lifecycle ────────────────────────────────────────────────────────────
+
+/** Store an explicit cwd on every chain step so resumes keep the original default. */
+export function persistChainSteps(
+	chain: Array<{ agent?: string; task: string; cwd?: string; tier?: string; name?: string }>,
+	defaultCwd: string,
+): ManifestChainStep[] {
+	return chain.map((step) => ({ ...step, cwd: step.cwd ?? defaultCwd }));
+}
 
 export function createJob(
 	mode: JobMode,
@@ -186,28 +219,31 @@ export function createJob(
 		finished: false,
 		chainRunnerDone: false,
 		pendingSpawns: 0,
+		dispatchAllowed: true,
 		emit,
 		parentSessionId: persist?.parentSessionId,
 	};
 	jobs.set(job.id, job);
 	if (persist) {
-		// Write-ordering invariant: the manifest exists before any child spawns.
+		// Every spawn awaits this attempt before opening its transcript directory.
+		// Store failures remain best-effort and fall back to an ephemeral child.
+		const now = Date.now();
 		const manifest = {
 			version: MANIFEST_VERSION,
 			jobId: job.id,
 			parentSessionId: persist.parentSessionId,
 			mode,
-			createdAt: Date.now(),
-			updatedAt: Date.now(),
+			createdAt: now,
+			updatedAt: now,
 			notifyOnComplete,
 			status: "running" as const,
+			owner: currentManifestOwner(),
 			...(chainTotal !== undefined ? { chainTotal } : {}),
 			...(persist.chain ? { chain: persist.chain } : {}),
 			tasks: [],
 		};
-		void writeManifest(getDefaultJobsRoot(), persist.parentSessionId, manifest).catch(() => {
-			/* best-effort: store problems never break spawning */
-		});
+		job.persistenceReady = writeManifest(getDefaultJobsRoot(), persist.parentSessionId, manifest)
+			.then(() => true, () => false);
 	}
 	return job;
 }
@@ -244,51 +280,76 @@ export function runChainFrom(
 	defaultCwd: string,
 	modelCtx: ModelContext,
 	signal?: AbortSignal,
+	spawnProcess?: ResumeInit["spawnProcess"],
 ) {
-	// Kick off without awaiting — the job's completion drives callers.
+	// Exactly one runner owns advancement at a time. A paused runner releases
+	// ownership so resume can install the continuation after the current step.
+	if (job.chainRunnerActive) return;
+	job.chainRunnerActive = true;
 	void (async () => {
 		let previousOutput = initialPrevious;
-		for (let i = startIndex; i < chain.length; i++) {
-			const step = chain[i];
-			const agent = resolveAgent(step.agent, agents);
-			if (!agent) {
-				job.status = "failed";
-				job.errorMessage = `Chain stopped at step ${i + 1}: unknown agent "${step.agent}". Available agents: ${formatAgentList(agents).text}.`;
-				break;
+		let shouldFinish = true;
+		try {
+			for (let i = startIndex; i < chain.length; i++) {
+				if (signal?.aborted) {
+					job.abortRequested = true;
+					job.dispatchAllowed = false;
+					job.status = "aborted";
+					job.errorMessage = `Chain aborted before step ${i + 1}`;
+					break;
+				}
+				const step = chain[i];
+				const agent = resolveAgent(step.agent, agents);
+				if (!agent) {
+					job.status = "failed";
+					job.errorMessage = `Chain stopped at step ${i + 1}: unknown agent "${step.agent}". Available agents: ${formatAgentList(agents).text}.`;
+					break;
+				}
+				const task = await spawnTask(agent, step.task.replace(/\{previous\}/g, previousOutput), step.cwd ?? defaultCwd, job.id, {
+					step: i + 1,
+					tier: step.tier,
+					name: step.name,
+					modelCtx,
+					spawnProcess,
+				});
+				const completed = await waitForTaskOrPause(task.id, { signal });
+				if (!completed && signal?.aborted) {
+					job.abortRequested = true;
+					job.dispatchAllowed = false;
+					killTask(task);
+					await waitForTask(task.id, {});
+					job.status = "aborted";
+					job.errorMessage = `Chain aborted at step ${i + 1} (${step.agent})`;
+					break;
+				}
+				if (task.status === "paused") {
+					shouldFinish = false;
+					return;
+				}
+				if (task.status === "interrupted") {
+					job.status = "interrupted";
+					job.errorMessage = `Chain interrupted at step ${i + 1} (${step.agent}): ${task.errorMessage || "child did not finish"}`;
+					break;
+				}
+				if (isFailedState(task)) {
+					job.status = "failed";
+					job.errorMessage = `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(task)}`;
+					break;
+				}
+				previousOutput = readOutputArtifact(task.outputPath) ?? getFinalOutput(task.messages);
 			}
-			const task = await spawnTask(agent, step.task.replace(/\{previous\}/g, previousOutput), step.cwd ?? defaultCwd, job.id, {
-				step: i + 1,
-				tier: step.tier,
-				name: step.name,
-				modelCtx,
-			});
-			const completed = await waitForTask(task.id, { signal });
-			if (!completed && signal?.aborted) {
-				killTask(task);
-				await waitForTask(task.id, {});
-				job.status = "aborted";
-				job.errorMessage = `Chain aborted at step ${i + 1} (${step.agent})`;
-				break;
+			if (job.status === "running") job.status = "completed";
+		} catch (err) {
+			job.status = "failed";
+			job.errorMessage = `Chain runner failed: ${err instanceof Error ? err.message : String(err)}`;
+		} finally {
+			job.chainRunnerActive = false;
+			if (shouldFinish) {
+				job.chainRunnerDone = true;
+				await flushJobStatus(job);
+				checkJobComplete(job);
 			}
-			if (task.status === "interrupted") {
-				// Environment killed the step (external signal or stream error,
-				// e.g. connection loss). Stop the chain and stay resumable at
-				// this step instead of continuing on a truncated {previous}.
-				job.status = "interrupted";
-				job.errorMessage = `Chain interrupted at step ${i + 1} (${step.agent}): ${task.errorMessage || "child did not finish"}`;
-				break;
-			}
-			if (isFailedState(task)) {
-				job.status = "failed";
-				job.errorMessage = `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(task)}`;
-				break;
-			}
-			previousOutput = getFinalOutput(task.messages);
 		}
-		if (job.status === "running") job.status = "completed";
-		job.chainRunnerDone = true;
-		checkJobComplete(job);
-		flushJobStatus(job);
 	})();
 }
 
@@ -316,34 +377,49 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
 
 // ── Result builders ──────────────────────────────────────────────────────────
 
+export function taskResultText(task: Task, output = getResultOutput(task)): string {
+	const text = output || "(no output)";
+	return boundOutput(task.outputPath ? `${text}\n\nFull output: ${task.outputPath}` : text, { artifactPath: task.outputPath });
+}
+
 export function spawnResultText(job: Job, label: string): string {
-	return [
+	return boundOutput([
 		`Spawned ${job.tasks.length} background subagent(s) (${label}).`,
 		`jobId: ${job.id}`,
 		"",
 		"They will run in the background while you continue working. A summary is delivered when the batch finishes (disable with notifyOnComplete: false).",
-		"Collect full results with subagent_wait; check progress with subagent_status (use this jobId).",
-	].join("\n");
+		"Collect results with subagent_wait; check progress with subagent_status (use this jobId).",
+	].join("\n"));
 }
 
 export function collectResultText(jobIds: string[], timeoutNote?: string): { text: string; anyFailed: boolean } {
-	const collected: Task[] = [];
+	const collected: Array<Task | TaskInfo> = [];
 	let anyFailed = false;
+	const unknown: string[] = [];
 	for (const id of jobIds) {
 		const job = jobs.get(id);
-		if (job) {
-			for (const t of job.tasks) {
-				collected.push(t);
-				if (isFailedState(t) || t.status === "interrupted") anyFailed = true;
-			}
+		const rows = job?.tasks ?? persistedTaskInfos(id);
+		if (!job && rows.length === 0) unknown.push(id);
+		for (const task of rows) {
+			collected.push(task);
+			if (isFailedState(task) || task.status === "interrupted") anyFailed = true;
 		}
 	}
-	const unknown = jobIds.filter((id) => !jobs.has(id));
 	const parts: string[] = [];
-	if (collected.length > 0) parts.push(formatStatusReport(collected, { maxOutputBytes: 50 * 1024 }));
+	if (collected.length > 0) parts.push(formatStatusReport(collected, {
+		maxOutputBytes: Number.MAX_SAFE_INTEGER,
+		maxOutputLines: Number.MAX_SAFE_INTEGER,
+	}));
 	if (unknown.length > 0) parts.push(`Unknown job id(s) (not found in this session): ${unknown.join(", ")}`);
 	if (timeoutNote) parts.push(timeoutNote);
-	return { text: parts.join("\n\n---\n\n"), anyFailed };
+	const fullText = parts.join("\n\n---\n\n");
+	const lineCount = fullText.length === 0 ? 0 : (fullText.match(/\n/g)?.length ?? 0) + 1;
+	let artifactPath: string | undefined;
+	if (Buffer.byteLength(fullText, "utf8") > DEFAULT_OUTPUT_CAP_BYTES || lineCount > DEFAULT_OUTPUT_CAP_LINES) {
+		try { artifactPath = writeOutputArtifact(fullText, { taskId: `collect-${randomUUID()}` }).path; }
+		catch { /* bounded output still reports artifact unavailable */ }
+	}
+	return { text: boundOutput(fullText, { artifactPath }), anyFailed };
 }
 
 // ── Pause & resume ───────────────────────────────────────────────────────────
@@ -354,7 +430,10 @@ export function pauseJob(jobId: string): { job: Job; paused: Task[] } | undefine
 	return { job, paused: pauseJobTasks(job) };
 }
 
+const resumeAdmissions = new Set<string>();
+
 export interface ResumeInit {
+	spawnProcess?: typeof import("node:child_process").spawn;
 	agents: AgentSummary[];
 	defaultCwd: string;
 	modelCtx: ModelContext;
@@ -373,67 +452,118 @@ export async function resumeJob(
 	jobId: string,
 	init: ResumeInit,
 ): Promise<{ job?: Job; notes?: string[]; error?: string }> {
+	// Admission is claimed synchronously, before any disk/manifest await. The
+	// in-memory job may not exist yet (e.g. after reload), so it cannot be the
+	// sole same-process exclusion mechanism.
+	if (resumeAdmissions.has(jobId)) return { error: `Job ${jobId} is already being resumed.` };
+	const existing = jobs.get(jobId);
+	if (blocksResume(existing)) return { error: `Job ${jobId} is still active in this session; pause or wait for it to finish first.` };
+	resumeAdmissions.add(jobId);
+	if (existing) existing.resumeBusy = true;
+	try {
+		return await resumeJobClaimed(jobId, init);
+	} finally {
+		resumeAdmissions.delete(jobId);
+		if (existing) existing.resumeBusy = false;
+	}
+}
+
+async function resumeJobClaimed(
+	jobId: string,
+	init: ResumeInit,
+): Promise<{ job?: Job; notes?: string[]; error?: string }> {
 	const root = getJobsRoot();
 	const psid = getParentSessionId();
 	if (!root || !psid) return { error: "No durable job store for this session." };
-	const manifest = readManifest(root, psid, jobId);
+	let manifest = readManifest(root, psid, jobId);
 	if (!manifest) {
 		return { error: `No persisted job "${jobId}" for this session (jobs are bound to the session that spawned them).` };
 	}
-	if (blocksResume(jobs.get(jobId)))
-		return { error: `Job ${jobId} is still active in this session; pause or wait for it to finish first.` };
+	const existing = jobs.get(jobId);
+	if (!resumePlan(manifest)) {
+		return { error: `Job ${jobId} is not resumable (status: ${manifest.status}).` };
+	}
+	// Claim under the manifest transaction lock before rebuilding/spawning. This
+	// prevents a second live parent process from resuming the same durable job.
+	let claimed;
+	try { claimed = await claimManifest(root, psid, jobId); } catch {
+		return { error: `Job ${jobId} could not be claimed.` };
+	}
+	if (!claimed) {
+		return { error: `Job ${jobId} is owned by another live process or could not be claimed.` };
+	}
+	manifest = claimed;
 	const plan = resumePlan(manifest);
-	if (!plan) return { error: `Job ${jobId} is not resumable (status: ${manifest.status}).` };
+	if (!plan) {
+		return { error: `Job ${jobId} is not resumable (status: ${manifest.status}).` };
+	}
 
 	// Rebuild the registry job. Completed tasks come back with their manifest
 	// finalOutput as a synthetic assistant message so every existing render
 	// path (getFinalOutput, task lists, usage) works unchanged.
-	const job: Job = {
+	const job: Job = existing && !existing.finished ? existing : {
 		id: manifest.jobId,
 		mode: manifest.mode,
 		status: "running",
 		tasks: [],
 		chainTotal: manifest.chainTotal,
-		notifyOnComplete: init.notifyOnComplete,
+		notifyOnComplete: !init.wait && init.notifyOnComplete,
 		notified: false,
 		finished: false,
 		chainRunnerDone: false,
 		pendingSpawns: 0,
 		emit: init.emit,
 		parentSessionId: psid,
+		persistenceReady: Promise.resolve(true),
+		dispatchAllowed: true,
 	};
-	for (const t of manifest.tasks) {
-		if (t.status === "completed") {
-			job.tasks.push({
-				id: t.taskId,
-				jobId: job.id,
-				agent: t.agent,
-				agentSource: "manifest",
-				task: t.task,
-				cwd: t.cwd,
-				status: "completed",
-				startedAt: t.startedAt,
-				finishedAt: t.finishedAt,
-				exitCode: 0,
-				name: t.name,
-				messages: t.finalOutput
-					? [{ role: "assistant", content: [{ type: "text", text: t.finalOutput }] }]
-					: [],
-				live: emptyLiveTrace(),
-				stderr: "",
-				usage: { ...emptyUsage(), ...t.usage },
-				model: t.model,
-				step: t.step,
-				sessionFile: t.sessionFile,
-			});
-		}
+	if (job === existing) {
+		job.notifyOnComplete = !init.wait && init.notifyOnComplete;
+		job.notified = false;
+		job.emit = init.emit;
+		job.chainRunnerDone = false;
+		job.chainRunnerActive = false;
+		job.dispatchEpoch = (job.dispatchEpoch ?? 0) + 1;
+		job.status = "running";
+		job.dispatchAllowed = true;
+		job.abortRequested = false;
+		job.finished = false;
+	} else for (const t of manifest.tasks) {
+		const restored: Task = {
+			id: t.taskId,
+			jobId: job.id,
+			agent: t.agent,
+			agentSource: "manifest",
+			task: t.task,
+			cwd: t.cwd,
+			status: t.status,
+			dispatchState: t.dispatchState ?? (t.status === "running" ? "queued" : t.status === "completed" || t.status === "failed" || t.status === "aborted" ? "terminal" : "paused"),
+			startedAt: t.startedAt,
+			finishedAt: t.finishedAt,
+			exitCode: t.exitCode,
+			name: t.name,
+			messages: t.finalOutput ? [{ role: "assistant", content: [{ type: "text", text: t.finalOutput }] }] : [],
+			live: emptyLiveTrace(),
+			stderr: "",
+			usage: { ...emptyUsage(), ...t.usage },
+			model: t.model,
+			requestedTier: t.tier,
+			step: t.step,
+			sessionFile: t.sessionFile,
+			sessionDir: t.sessionFile ? path.dirname(t.sessionFile) : (t.dispatchState === "queued" || isResumableJob(manifest) ? taskSessionDir(root, psid, job.id) : undefined),
+			stopReason: t.stopReason,
+			errorMessage: t.errorMessage,
+			outputPath: t.outputPath,
+			outputBytes: t.outputBytes,
+		};
+		tasks.set(restored.id, restored);
+		job.tasks.push(restored);
 	}
 	jobs.set(job.id, job);
 
-	// Flush the manifest back to running before spawning (write-ordering).
-	void updateManifest(root, psid, job.id, (m) => {
+	await updateManifest(root, psid, job.id, (m) => {
 		m.status = "running";
-		m.notifyOnComplete = init.notifyOnComplete;
+		m.notifyOnComplete = !init.wait && init.notifyOnComplete;
 	}).catch(() => {
 		/* best-effort */
 	});
@@ -447,6 +577,7 @@ export async function resumeJob(
 			notes.push(`agent "${t.agent}" no longer defined; task ${t.name ?? t.taskId} runs on the default agent`);
 		}
 		const sessionFile = t.sessionFile;
+		const shouldContinue = t.dispatchState !== "queued" && isResumableStatus(t.status) && !!sessionFile;
 		if (!sessionFile) {
 			notes.push(`session file missing for task ${t.name ?? t.taskId}; re-running from scratch`);
 		}
@@ -457,37 +588,68 @@ export async function resumeJob(
 			notes.push(`model "${t.model}" is ambiguous or unknown; task ${t.name ?? t.taskId} re-resolves its model`);
 		}
 		return spawnTask(agent ?? resolveAgent(undefined, init.agents)!, t.task, t.cwd, job.id, {
+			taskId: t.taskId,
 			step: t.step,
 			tier: pin ? undefined : t.tier,
 			modelOverride: pin,
 			name: t.name,
 			modelCtx: init.modelCtx,
-			resume: sessionFile ? { sessionFile, originalTask: t.task } : undefined,
+			spawnProcess: init.spawnProcess,
+			resume: shouldContinue ? { sessionFile, originalTask: t.task } : undefined,
 		});
 	};
 
 	if (manifest.mode === "parallel" && plan.respawnTasks.length > 1) {
-		// Parallel: spawn + wait inside the same concurrency limit as fresh runs.
+		// Each resume owns one dispatch epoch. Pausing invalidates it synchronously;
+		// workers also wake on pause instead of remaining attached to a later resume.
+		const epoch = job.dispatchEpoch ?? 0;
+		job.dispatchEpoch = epoch;
 		const drained = mapWithConcurrencyLimit(plan.respawnTasks, MAX_CONCURRENCY, async (t) => {
-			await respawn(t);
-			await waitForTask(t.taskId, { signal: init.signal });
+			if (job.dispatchEpoch !== epoch || job.abortRequested) return;
+			const task = await respawn(t);
+			const completed = await waitForTaskOrPause(task.id, { signal: init.signal });
+			if (!completed || task.status === "paused" || job.dispatchEpoch !== epoch || job.abortRequested) return;
 		});
-		if (init.wait) await drained;
-		else void drained.catch(() => {});
-	} else {
+		void drained.catch(() => {});
+	} else if (manifest.mode !== "chain") {
 		for (const t of plan.respawnTasks) void respawn(t);
 	}
 
 	if (manifest.mode === "chain") {
-		// The respawned current step must finish before fresh steps run.
+		// A resumed chain step owns advancement only if that exact step completes.
+		// Its newly produced output, not the pre-resume plan snapshot, feeds {previous}.
 		const current = plan.respawnTasks[0];
+		const priorCompleted = manifest.tasks.find((entry) => entry.status === "completed" && entry.step === plan.freshStartStep - 1);
+		const fullPreviousOutput = readOutputArtifact(priorCompleted?.outputPath) ?? plan.previousOutput;
 		if (current) {
 			void (async () => {
-				await waitForTask(current.taskId, { signal: init.signal });
-				runChainFrom(job, manifest.chain ?? [], plan.freshStartStep - 1, plan.previousOutput, init.agents, init.defaultCwd, init.modelCtx, init.signal);
+				const launched = await respawn(current);
+				const completed = await waitForTaskOrPause(launched.id, { signal: init.signal });
+				if (!completed && init.signal?.aborted) {
+					job.abortRequested = true;
+					job.dispatchAllowed = false;
+					if (launched.status === "running") killTask(launched);
+					await waitForTask(launched.id, {});
+					job.status = "aborted";
+					job.errorMessage = `Chain aborted at resumed step ${launched.step ?? current.step ?? 1}`;
+					job.chainRunnerDone = true;
+					await flushJobStatus(job);
+					checkJobComplete(job);
+					return;
+				}
+				if (launched.status === "paused") return;
+				if (launched.status !== "completed") {
+					job.status = launched.status === "interrupted" ? "interrupted" : launched.status === "aborted" ? "aborted" : "failed";
+					job.errorMessage = `Chain stopped at resumed step ${launched.step ?? current.step ?? 1} (${launched.agent}): ${launched.errorMessage || getResultOutput(launched) || launched.status}`;
+					job.chainRunnerDone = true;
+					await flushJobStatus(job);
+					checkJobComplete(job);
+					return;
+				}
+				runChainFrom(job, manifest.chain ?? [], (launched.step ?? current.step ?? 1), readOutputArtifact(launched.outputPath) ?? getFinalOutput(launched.messages), init.agents, init.defaultCwd, init.modelCtx, init.signal, init.spawnProcess);
 			})();
 		} else {
-			runChainFrom(job, manifest.chain ?? [], plan.freshStartStep - 1, plan.previousOutput, init.agents, init.defaultCwd, init.modelCtx, init.signal);
+			runChainFrom(job, manifest.chain ?? [], plan.freshStartStep - 1, fullPreviousOutput, init.agents, init.defaultCwd, init.modelCtx, init.signal, init.spawnProcess);
 		}
 	}
 
@@ -548,13 +710,13 @@ export function listJobsForCurrentSession(): JobListing[] {
 
 export function formatJobListings(list: JobListing[]): string {
 	if (list.length === 0) return "(no subagent jobs for this session)";
-	return list
+	return boundOutput(list
 		.map((j) => {
 			const done = j.tasks.filter((t) => t.status === "completed").length;
 			const names = j.tasks.map((t) => `${t.agent}${t.name ? `/${t.name}` : ""}(${t.status})`).join(", ") || "(no tasks)";
 			return `- ${j.id} [${j.mode}] ${j.jobStatus} ${done}/${j.tasks.length} done${j.resumable ? " · resumable" : ""} · ${names} · source: ${j.source}`;
 		})
-		.join("\n");
+		.join("\n"));
 }
 
 export function hasPersistedJob(jobId: string): boolean {
@@ -584,5 +746,7 @@ export function persistedTaskInfos(jobId: string): TaskInfo[] {
 		stopReason: t.stopReason,
 		errorMessage: t.errorMessage,
 		finishedAt: t.finishedAt,
+		outputPath: t.outputPath,
+		outputBytes: t.outputBytes,
 	}));
 }

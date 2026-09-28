@@ -261,8 +261,14 @@ function runningTaskLines(theme: any, width: number): string[] {
 	if (running.length === 0) return [];
 
 	const now = Date.now();
+	const queued = running.filter((t) => t.dispatchState === "queued").length;
+	const active = running.length - queued;
+	const summary = [
+		...(active > 0 ? [`${active} running`] : []),
+		...(queued > 0 ? [`${queued} queued`] : []),
+	].join(", ");
 	const lines: string[] = [
-		theme.fg("warning", `⏳ ${running.length} subagent${running.length === 1 ? "" : "s"} running`) +
+		theme.fg("warning", `⏳ ${running.length} subagent${running.length === 1 ? "" : "s"} (${summary})`) +
 		theme.fg("muted", ` · ${WATCH_PANE_KEYBIND} to watch`),
 	];
 	for (const t of running) {
@@ -275,7 +281,8 @@ function runningTaskLines(theme: any, width: number): string[] {
 		const modelTag = formatModelTag(t.model);
 		const modelText = modelTag ? ` ${theme.fg("dim", modelTag)}` : "";
 		const name = t.name ? theme.fg("accent", ` ${t.name}`) : "";
-		lines.push(`  ${theme.fg("warning", "▸")} ${theme.fg("accent", t.agent)}${name}${modelText}${theme.fg("dim", ` ${elapsed}`)}${step}  ${lastActivity(t, theme)}`);
+		const marker = t.dispatchState === "queued" ? theme.fg("muted", "◷ queued") : theme.fg("warning", "▸ running");
+		lines.push(`  ${marker} ${theme.fg("accent", t.agent)}${name}${modelText}${theme.fg("dim", ` ${elapsed}`)}${step}  ${lastActivity(t, theme)}`);
 	}
 	return lines.map((line) => truncateToWidth(line, width));
 }

@@ -34,6 +34,8 @@ export interface TraceRenderOptions {
 	/** (token, text) → styled text; abstract tokens like traceToLines. */
 	style: StyleFn;
 	formatToolCall: FormatToolCallFn;
+	/** Optional markdown theme override, primarily for deterministic component tests. */
+	markdownTheme?: MarkdownTheme;
 }
 
 /**
@@ -41,12 +43,11 @@ export interface TraceRenderOptions {
  * (cached per segment); without a markdown theme it degrades to the plain
  * `traceToLines` path.
  *
- * NOT unit-tested with node --test (imports pi-tui); its testable core —
- * LineCache, isMarkdownSegment, resolveOptional — lives in live.ts and is
- * covered by tests/live.test.mjs.
+ * Interaction tests use the real pi-tui Markdown component and a controlled
+ * markdown theme to verify cached output is rebuilt after invalidation.
  */
 export class TraceRenderer {
-	private readonly cache: LineCache;
+	private cache: LineCache;
 	private readonly style: StyleFn;
 	private readonly formatToolCall: FormatToolCallFn;
 	private readonly md: MarkdownTheme | undefined;
@@ -55,7 +56,7 @@ export class TraceRenderer {
 		this.cache = new LineCache(opts.width);
 		this.style = opts.style;
 		this.formatToolCall = opts.formatToolCall;
-		this.md = resolveOptional(() => getMarkdownTheme());
+		this.md = opts.markdownTheme ?? resolveOptional(() => getMarkdownTheme());
 		if (!this.md) {
 			console.warn("watch: markdown theme unavailable; watch pane uses plain rendering");
 		}
@@ -64,6 +65,11 @@ export class TraceRenderer {
 	/** Change the render width (invalidates the cache only when it changed). */
 	setWidth(width: number): void {
 		this.cache.setWidth(width);
+	}
+
+	/** Drop cached ANSI lines when the active theme changes, even if its proxy is stable. */
+	invalidate(): void {
+		this.cache = new LineCache(this.cache.width);
 	}
 
 	/** Full styled line list for the trace (not windowed to a height). */

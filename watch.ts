@@ -72,9 +72,8 @@ let watchTimer: NodeJS.Timeout | undefined;
 /** Overlay width captured at the last render (for input-time scroll math). */
 let watchWidth = 0;
 /**
- * Markdown-aware trace renderer. Hot-reload colors propagate lazily through
- * pi's theme proxy on every render; this latch is a safety net that rebuilds
- * the renderer when the widget hands us a new theme instance.
+ * Markdown-aware trace renderer. Theme changes invalidate cached ANSI lines
+ * through the overlay's invalidate hook; this also handles stable proxy identity.
  */
 let traceRenderer: TraceRenderer | undefined;
 let traceRendererTheme: any | undefined;
@@ -139,7 +138,7 @@ export function toggleWatch(): void {
 	watchState = { taskId: running[0].id, viewTop: FOLLOW_TAIL };
 	const component = {
 		render: (width: number) => renderWatchPane(tui, width),
-		invalidate: () => {},
+		invalidate: () => traceRenderer?.invalidate(),
 	};
 	watchHandle = tui.showOverlay(component, {
 		anchor: "center",
@@ -325,7 +324,7 @@ function renderWatchPane(tui: TUI, width: number): string[] {
 		contentWidth: bodyW,
 		border: (text) => theme.fg("border", text),
 		padLine: padToWidth,
-	});
+	}).map((line) => truncateToWidth(line, width, "", true));
 }
 
 function buildHeader(task: Task | null, running: Task[], state: WatchState, theme: any): string {
@@ -338,7 +337,11 @@ function buildHeader(task: Task | null, running: Task[], state: WatchState, them
 	const pct = task?.contextWindow ? ((task.usage.contextTokens / task.contextWindow) * 100) : 0;
 	const ctxColor = pct > 90 ? "error" : pct > 70 ? "warning" : "dim";
 	const ctxSeg = ctx ? theme.fg(ctxColor, `ctx ${ctx}`) : "";
-	const status = task?.status === "running" ? theme.fg("warning", "● watching") : theme.fg("success", "✓ done");
+	const status = task?.dispatchState === "queued"
+		? theme.fg("warning", "◷ queued")
+		: task?.status === "running"
+			? theme.fg("warning", "● running")
+			: theme.fg("success", "✓ done");
 	const meta = [label, sel, elapsed, model, ctxSeg].filter(Boolean).join(theme.fg("dim", " · "));
 	return `${status}  ${meta}`;
 }

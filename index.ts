@@ -31,18 +31,17 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { killTask, markInterruptedSweep } from "./process.ts";
+import { beginTaskShutdown, markInterruptedSweep, resumeTaskSpawning, shutdownTaskProcesses } from "./process.ts";
 import { seedBundledAgents } from "./agents.ts";
 import {
 	clearRegistry,
-	listRunningTasks,
 	setJobFinishedHook,
 	setMessageSender,
 	setJobsRoot,
 	setParentSessionId,
 } from "./runtime.ts";
 import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, registerInterruptedRenderer, INTERRUPTED_MESSAGE_TYPE, setUi } from "./tui.ts";
-import { deletePath, isJobExpired, isResumableJob, listJobManifests, pruneEmptyBuckets } from "./store.ts";
+import { deleteExpiredJob, isResumableJob, listJobManifests, pruneEmptyBuckets, reconcileManifest } from "./store.ts";
 import { formatJobListings, getDefaultJobsRoot, listJobsForCurrentSession, readJobRetentionDays } from "./jobs.ts";
 import { disposeWatch, handleWatchInput, maybeAutoCloseWatch } from "./watch.ts";
 import { registerSubagentsCommand } from "./command-subagents.ts";
@@ -79,21 +78,28 @@ export default function (pi: ExtensionAPI) {
 	seedBundledAgents();
 
 	pi.on("session_start", async (event, ctx) => {
+		resumeTaskSpawning();
 		// Session-scoped persistence: bind the store bucket, GC old jobs, and
 		// surface resumable jobs from a previous run of THIS session.
 		const psid = ctx.sessionManager?.getSessionId?.();
 		setParentSessionId(psid);
 		const root = getDefaultJobsRoot();
 		setJobsRoot(root);
-		if (psid) {
-			try {
-				const retention = readJobRetentionDays();
-				const entries = listJobManifests(root).filter((e) => e.parentSessionId === psid);
-				const now = Date.now();
-				for (const e of entries) {
-					if (isJobExpired(e.manifest.updatedAt, now, retention)) await deletePath(e.dir);
+		try {
+			const retention = readJobRetentionDays();
+			const now = Date.now();
+			// GC all parent-session buckets. A live owner with a running job is
+			// protected even when another session starts in this Pi process.
+			for (const e of listJobManifests(root)) {
+				await deleteExpiredJob(root, e.parentSessionId, e.jobId, now, retention);
+			}
+			await pruneEmptyBuckets(root);
+			if (psid) {
+				// Reconcile THIS session only, and await all durable recovery before
+				// surfacing jobs or allowing later tool calls to resume them.
+				for (const e of listJobManifests(root).filter((entry) => entry.parentSessionId === psid)) {
+					await reconcileManifest(root, psid, e.jobId);
 				}
-				await pruneEmptyBuckets(root);
 				// Surface only when THIS session starts/resumes; a brand-new session
 				// gets a fresh id and must never see another session's jobs (spec).
 				if (event.reason === "startup" || event.reason === "resume") {
@@ -111,9 +117,9 @@ export default function (pi: ExtensionAPI) {
 						);
 					}
 				}
-			} catch {
-				/* store problems never block startup */
 			}
+		} catch {
+			/* store problems never block startup */
 		}
 		if (!ctx.hasUI) return;
 		setUi(ctx.ui);
@@ -121,6 +127,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		// Prevent delayed spawn setup from launching a child after this sweep starts.
+		beginTaskShutdown();
 		// Drop UI references first so task-close callbacks during teardown no-op.
 		setUi(undefined);
 		disposeWidget();
@@ -132,7 +140,9 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			/* best-effort */
 		}
-		for (const t of listRunningTasks()) killTask(t);
+		// Ownership comes from actual child processes, not task status: the
+		// durable sweep may already have changed running tasks to interrupted.
+		await shutdownTaskProcesses();
 		clearRegistry();
 	});
 

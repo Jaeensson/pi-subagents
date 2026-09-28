@@ -56,33 +56,96 @@ export function emptyLiveTrace(): LiveTrace {
 	return { segments: [], bytes: 0, dropped: 0, pending: null, emittedToolIndices: new Set(), messageSealed: false };
 }
 
+interface PendingState {
+	parts: string[];
+	bytes: number;
+}
+
+const pendingStates = new WeakMap<LiveTrace, PendingState>();
+const PENDING_CHUNK_TARGET_BYTES = 4 * 1024;
+
+function makePending(trace: LiveTrace, kind: "thinking" | "text"): void {
+	const state: PendingState = { parts: [], bytes: 0 };
+	pendingStates.set(trace, state);
+	trace.pending = { kind, get text() { return state.parts.join(""); } };
+}
+
+function setPendingContent(trace: LiveTrace, text: string): void {
+	const state = pendingStates.get(trace);
+	if (!state || !trace.pending) return;
+	state.parts = text ? [text] : [];
+	state.bytes = Buffer.byteLength(text, "utf8");
+}
+
+/** Remove at least `bytes` from the front without leaving a partial UTF-8 code point. */
+function trimUtf8Prefix(text: string, bytes: number): { text: string; removed: number } {
+	let offset = 0;
+	let removed = 0;
+	for (const char of text) {
+		if (removed >= bytes) break;
+		offset += char.length;
+		removed += Buffer.byteLength(char, "utf8");
+	}
+	return { text: Buffer.from(text.slice(offset), "utf8").toString("utf8"), removed };
+}
+
+function trimPending(trace: LiveTrace, bytes: number): void {
+	const state = pendingStates.get(trace);
+	if (!state || bytes <= 0) return;
+	let remaining = bytes;
+	let removed = 0;
+	while (remaining > 0 && state.parts.length > 0) {
+		const first = state.parts[0];
+		const firstBytes = Buffer.byteLength(first, "utf8");
+		if (firstBytes <= remaining) {
+			state.parts.shift();
+			remaining -= firstBytes;
+			removed += firstBytes;
+		} else {
+			const trimmed = trimUtf8Prefix(first, remaining);
+			state.parts[0] = trimmed.text;
+			remaining -= trimmed.removed;
+			removed += trimmed.removed;
+		}
+	}
+	state.bytes -= removed;
+	trace.bytes -= removed;
+	if (removed > 0) trace.dropped++;
+}
+
 function segmentBytes(seg: TraceSegment): number {
 	const payload =
 		seg.kind === "toolCall" ? `${seg.name}${JSON.stringify(seg.args)}` : seg.text;
 	return Buffer.byteLength(payload, "utf8");
 }
 
-/** Evict whole segments from the head while over cap. Never evicts `pending`. */
+/** Evict old segments, then clip an oversized pending stream to its UTF-8-safe tail. */
 function enforceCap(trace: LiveTrace): void {
 	while (trace.bytes > LIVE_TRACE_CAP_BYTES && trace.segments.length > 0) {
 		const head = trace.segments.shift()!;
 		trace.bytes = Math.max(0, trace.bytes - segmentBytes(head));
 		trace.dropped++;
 	}
+	if (trace.bytes > LIVE_TRACE_CAP_BYTES && trace.pending) {
+		trimPending(trace, trace.bytes - LIVE_TRACE_CAP_BYTES);
+	}
 }
 
 function sealPending(trace: LiveTrace): void {
 	const pending = trace.pending;
 	if (!pending) return;
+	const state = pendingStates.get(trace);
+	const text = pending.text;
 	trace.pending = null;
-	if (!pending.text.trim()) {
-		trace.bytes = Math.max(0, trace.bytes - Buffer.byteLength(pending.text, "utf8"));
+	pendingStates.delete(trace);
+	if (!text.trim()) {
+		trace.bytes = Math.max(0, trace.bytes - (state?.bytes ?? Buffer.byteLength(text, "utf8")));
 		return;
 	}
 	trace.segments.push(
 		pending.kind === "thinking"
-			? { kind: "thinking", text: pending.text }
-			: { kind: "text", text: pending.text },
+			? { kind: "thinking", text }
+			: { kind: "text", text },
 	);
 	// Bytes for pending text were already counted when appended.
 	enforceCap(trace);
@@ -93,10 +156,18 @@ function appendStreamDelta(trace: LiveTrace, kind: "thinking" | "text", delta: s
 	if (!delta) return;
 	if (!trace.pending || trace.pending.kind !== kind) {
 		sealPending(trace);
-		trace.pending = { kind, text: "" };
+		makePending(trace, kind);
 	}
-	trace.pending.text += delta;
-	trace.bytes += Buffer.byteLength(delta, "utf8");
+	const state = pendingStates.get(trace)!;
+	const deltaBytes = Buffer.byteLength(delta, "utf8");
+	const last = state.parts[state.parts.length - 1];
+	if (last && Buffer.byteLength(last, "utf8") + deltaBytes <= PENDING_CHUNK_TARGET_BYTES) {
+		state.parts[state.parts.length - 1] = last + delta;
+	} else {
+		state.parts.push(delta);
+	}
+	state.bytes += deltaBytes;
+	trace.bytes += deltaBytes;
 	enforceCap(trace);
 }
 
@@ -104,7 +175,7 @@ function appendStreamDelta(trace: LiveTrace, kind: "thinking" | "text", delta: s
 function applyStreamDelta(trace: LiveTrace, kind: "thinking" | "text", dt: string, deltaText: string | undefined, content: string | undefined): void {
 	if (dt.endsWith("_start")) {
 		sealPending(trace);
-		trace.pending = { kind, text: "" };
+		makePending(trace, kind);
 		return;
 	}
 	if (dt.endsWith("_delta")) {
@@ -119,8 +190,9 @@ function applyStreamDelta(trace: LiveTrace, kind: "thinking" | "text", dt: strin
 	// stream only when that stream is still pending.
 	if (content) {
 		if (trace.pending && trace.pending.kind === kind && !trace.pending.text) {
-			trace.pending.text = content;
+			setPendingContent(trace, content);
 			trace.bytes += Buffer.byteLength(content, "utf8");
+			enforceCap(trace);
 		}
 	}
 	if (trace.pending?.kind === kind) sealPending(trace);

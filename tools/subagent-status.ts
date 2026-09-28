@@ -9,6 +9,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { formatStatusReport } from "../core.ts";
+import { boundOutput } from "../output.ts";
 import { formatJobListings, hasPersistedJob, listJobsForCurrentSession, persistedTaskInfos } from "../jobs.ts";
 import { jobs, toTaskInfo, type ToolDetails } from "../runtime.ts";
 
@@ -35,6 +36,7 @@ export const subagentStatusTool = defineTool<typeof subagentStatusParams, ToolDe
 		}
 		const tasksList = params.jobIds.flatMap((id) => jobs.get(id)?.tasks ?? []);
 		const unknown = params.jobIds.filter((id) => !jobs.has(id) && !hasPersistedJob(id));
+		if (unknown.length > 0) throw new Error(`Unknown job id(s) (not found in this session): ${unknown.join(", ")}. Use jobIds returned by subagent, or subagent_resume with a persisted jobId.`);
 		// Persisted (crashed) jobs are not in the registry; render their manifest
 		// tasks so status works for interrupted jobs too.
 		const persistedTasks = params.jobIds
@@ -43,9 +45,8 @@ export const subagentStatusTool = defineTool<typeof subagentStatusParams, ToolDe
 		const parts: string[] = [];
 		if (tasksList.length > 0) parts.push(formatStatusReport(tasksList, { maxOutputBytes: 2000 }));
 		if (persistedTasks.length > 0) parts.push(formatStatusReport(persistedTasks, { maxOutputBytes: 2000 }));
-		if (unknown.length > 0) parts.push(`Unknown job id(s) (not found in this session): ${unknown.join(", ")}`);
 		return {
-			content: [{ type: "text", text: parts.join("\n\n---\n\n") || "(no tasks)" }],
+			content: [{ type: "text", text: boundOutput(parts.join("\n\n---\n\n") || "(no tasks)", { artifactPath: [...tasksList, ...persistedTasks].find((task) => task.outputPath)?.outputPath }) }],
 			details: { mode: "collect" as const, jobIds: params.jobIds, tasks: [...tasksList.map(toTaskInfo), ...persistedTasks] },
 		};
 	},
