@@ -37,10 +37,11 @@ import {
 	clearRegistry,
 	setJobFinishedHook,
 	setMessageSender,
+	setStatusChangedHook,
 	setJobsRoot,
 	setParentSessionId,
 } from "./runtime.ts";
-import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, registerInterruptedRenderer, INTERRUPTED_MESSAGE_TYPE, setUi } from "./tui.ts";
+import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, registerInterruptedRenderer, INTERRUPTED_MESSAGE_TYPE, setUi, updateStatusWidget } from "./tui.ts";
 import { deleteExpiredJob, isResumableJob, listJobManifests, pruneEmptyBuckets, reconcileManifest } from "./store.ts";
 import { formatJobListings, getDefaultJobsRoot, listJobsForCurrentSession, readJobRetentionDays } from "./jobs.ts";
 import { disposeWatch, handleWatchInput, maybeAutoCloseWatch } from "./watch.ts";
@@ -70,6 +71,7 @@ export default function (pi: ExtensionAPI) {
 	// The job-finished hook drives the watch-pane auto-close: the pane closes
 	// only when a whole job batch completes, not between chain steps.
 	setJobFinishedHook(() => maybeAutoCloseWatch());
+	setStatusChangedHook(updateStatusWidget);
 	registerCompletionRenderer(pi);
 	registerInterruptedRenderer(pi);
 

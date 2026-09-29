@@ -17,7 +17,8 @@ codingAgent.initTheme();
 const { registerSubagentsCommand } = await import("../command-subagents.ts");
 const { TraceRenderer } = await import("../watch-render.ts");
 const { emptyLiveTrace } = await import("../live.ts");
-const { tasks, jobs, incRunningCount, clearRegistry } = await import("../runtime.ts");
+const { tasks, jobs, incRunningCount, clearRegistry, notifyStatusChanged, setStatusChangedHook } = await import("../runtime.ts");
+const { default: subagentExtension } = await import("../index.ts");
 const { setUi, updateStatusWidget, disposeWidget } = await import("../tui.ts");
 const { toggleWatch, disposeWatch } = await import("../watch.ts");
 const { visibleWidth } = await import("@earendil-works/pi-tui");
@@ -136,6 +137,55 @@ test("watch overlay lines fit narrow widths with wide Unicode", () => {
   disposeWatch();
   disposeWidget();
   clearRegistry();
+});
+
+test("task status changes register the widget and make ctrl-alt-s open the watch pane", async () => {
+  const hooks = new Map();
+  let widget;
+  let terminalInput;
+  let overlay;
+  const tui = {
+    terminal: { rows: 30, columns: 80 },
+    requestRender() {},
+    showOverlay(component) { overlay = component; return { hide() {} }; },
+  };
+  const ui = {
+    onTerminalInput(handler) { terminalInput = handler; },
+    setWidget(_key, factory) { widget = factory?.(tui, theme); },
+  };
+  subagentExtension({
+    on(event, handler) { hooks.set(event, handler); },
+    registerMessageRenderer() {},
+    registerTool() {},
+    registerCommand() {},
+    sendMessage() {},
+  });
+  await hooks.get("session_start")(
+    { reason: "startup" },
+    { hasUI: true, sessionManager: { getSessionId: () => "watch-hook-test" }, ui },
+  );
+  const task = {
+    id: "watch-hook-task", jobId: "watch-hook-job", agent: "worker", task: "follow progress",
+    status: "running", dispatchState: "running", startedAt: Date.now(), messages: [], live: emptyLiveTrace(),
+    usage: { contextTokens: 0 }, model: "model", contextWindow: 1000,
+  };
+  tasks.set(task.id, task);
+  jobs.set(task.jobId, { id: task.jobId, status: "running", mode: "single" });
+  incRunningCount();
+
+  try {
+    notifyStatusChanged();
+    assert.ok(widget, "a running task must register the status widget");
+    assert.match(widget.render(80).join("\n"), /ctrl\+alt\+s to watch/);
+    terminalInput("\x1b[115;7u");
+    assert.ok(overlay, "ctrl-alt-s must open the live watch pane");
+    assert.match(overlay.render(80).join("\n"), /worker/);
+  } finally {
+    disposeWatch();
+    disposeWidget();
+    clearRegistry();
+    setStatusChangedHook(undefined);
+  }
 });
 
 test.after(() => rmSync(home, { recursive: true, force: true }));
