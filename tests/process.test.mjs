@@ -17,7 +17,7 @@ import {
 	pauseJobTasks,
 } from "../process.ts";
 import { resumeJob } from "../jobs.ts";
-import { clearRegistry, jobs, listRunningTasks, setJobsRoot, setParentSessionId, tasks, waitForJob, waitForTask } from "../runtime.ts";
+import { clearRegistry, getRunningCount, jobs, listRunningTasks, setJobsRoot, setParentSessionId, setStatusChangedHook, tasks, waitForJob, waitForTask } from "../runtime.ts";
 import { manifestPath, readManifest, writeManifest } from "../store.ts";
 
 function makeJob(id) {
@@ -176,6 +176,28 @@ test("task manifest entry is flushed before the child process starts", async () 
 		assert.equal(sawFlushedTask, true);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
+		cleanup();
+	}
+});
+
+test("status hook is notified after queued task transitions to a running child", async () => {
+	cleanup();
+	const job = makeJob("status-transition");
+	jobs.set(job.id, job);
+	const snapshots = [];
+	let child;
+	setStatusChangedHook(() => snapshots.push({ count: getRunningCount(), dispatchState: tasks.get("status-transition-task")?.dispatchState }));
+	try {
+		await spawnTask(testAgent(), "watch me", process.cwd(), job.id, {
+			taskId: "status-transition-task",
+			modelCtx: modelContext(),
+			spawnProcess: () => (child = fakeChild()),
+		});
+		assert.ok(snapshots.some((snapshot) => snapshot.count === 1 && snapshot.dispatchState === "running"));
+		closeChild(child);
+		assert.equal(await waitForJob(job.id), true);
+	} finally {
+		setStatusChangedHook(undefined);
 		cleanup();
 	}
 });

@@ -521,6 +521,7 @@ export async function spawnTask(
 			}
 			task.dispatchState = "running";
 			incRunningCount();
+			updateStatus();
 			try {
 				const proc = (options.spawnProcess ?? spawn)(invocation.command, invocation.args, {
 					cwd,
