@@ -68,17 +68,36 @@ const ChainItem = Type.Object({
 	name: Type.Optional(Type.String({ description: "Short session name for this task (shown in the status widget)." })),
 });
 
-const subagentParams = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (single mode). Omit for a raw prompt using the built-in default agent." })),
-	task: Type.Optional(Type.String({ description: "Task to delegate, or the raw prompt when no agent is given (single mode)" })),
-	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent?, task} for parallel execution (max 8); omit agent for a raw prompt using the built-in default agent" })),
-	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent?, task} for sequential execution; use {previous} in a task to reference the prior output; omit agent for a raw prompt using the built-in default agent" })),
-	wait: Type.Optional(Type.Boolean({ description: "true (default): block until done and return results. false: spawn in background and return jobIds immediately.", default: true })),
-	notifyOnComplete: Type.Optional(Type.Boolean({ description: "When wait: false, deliver a summary message when the batch finishes. Default: true.", default: true })),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+const waitParam = Type.Optional(Type.Boolean({ description: "true (default): block until done and return results. false: spawn in background and return jobIds immediately.", default: true }));
+const notifyOnCompleteParam = Type.Optional(Type.Boolean({ description: "When wait: false, deliver a summary message when the batch finishes. Default: true.", default: true }));
+
+const SingleParams = Type.Object({
+	mode: Type.Literal("single"),
+	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke. Omit for a raw prompt using the built-in default agent." })),
+	task: Type.String({ description: "Task to delegate, or the raw prompt when no agent is given" }),
+	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	tier: singleTierParam,
-	name: Type.Optional(Type.String({ description: 'Short human-readable name for this subagent session (single mode), e.g. "feature1-implementation". Shown in the status widget. Defaults to a slug of the task.' })),
-});
+	name: Type.Optional(Type.String({ description: 'Short human-readable name for this subagent session, e.g. "feature1-implementation". Shown in the status widget. Defaults to a slug of the task.' })),
+	wait: waitParam,
+	notifyOnComplete: notifyOnCompleteParam,
+}, { additionalProperties: false });
+
+const ParallelParams = Type.Object({
+	mode: Type.Literal("parallel"),
+	tasks: Type.Array(TaskItem, { minItems: 1, description: "Non-empty array of {agent?, task} for parallel execution (max 8); omit agent for a raw prompt using the built-in default agent" }),
+	wait: waitParam,
+	notifyOnComplete: notifyOnCompleteParam,
+}, { additionalProperties: false });
+
+const ChainParams = Type.Object({
+	mode: Type.Literal("chain"),
+	chain: Type.Array(ChainItem, { minItems: 1, description: "Non-empty array of {agent?, task} for sequential execution; use {previous} in a task to reference the prior output; omit agent for a raw prompt using the built-in default agent" }),
+	cwd: Type.Optional(Type.String({ description: "Working directory for chain agent processes" })),
+	wait: waitParam,
+	notifyOnComplete: notifyOnCompleteParam,
+}, { additionalProperties: false });
+
+const subagentParams = Type.Union([SingleParams, ParallelParams, ChainParams]);
 
 
 /** Themed per-status icon shared by the result renderers. */
@@ -96,8 +115,8 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 	label: "Subagent",
 	description: [
 		"Delegate tasks to specialized subagents with isolated context windows (each runs in its own pi process).",
-		"Modes (exactly one): single {agent?, task} (omit agent for a raw prompt using the built-in default agent),",
-		"parallel {tasks: [{agent?, task}]}, chain {chain: [{agent?, task}]} (sequential, {previous} placeholder; agent optional in both).",
+		"Set required mode to single, parallel, or chain: single {mode: 'single', agent?, task} (omit agent for a raw prompt using the built-in default agent),",
+		"parallel {mode: 'parallel', tasks: [{agent?, task}]}, chain {mode: 'chain', chain: [{agent?, task}]} (sequential, {previous} placeholder; agent optional in both).",
 		"wait: true (default) blocks until done and returns results. wait: false spawns background subagents and",
 		"returns jobIds immediately so you can keep working; a summary is delivered on completion, full results via subagent_wait.",
 		`Agent definitions live in ${getUserAgentsDir()} (*.md with YAML frontmatter: name, description, tools, tier, extensions).`,
@@ -111,7 +130,9 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 	],
 	parameters: subagentParams,
 
-	async execute(_toolCallId, params, signal, onUpdate, ctx) {
+	async execute(_toolCallId, rawParams, signal, onUpdate, ctx) {
+		// Keep defensive validation for direct calls that bypass the registered-tool schema.
+		const params: any = rawParams;
 		const agents = discoverUserAgents();
 		const modelCtx = buildModelContext(ctx);
 		const wait = params.wait ?? true;
@@ -120,31 +141,31 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			? (content: string, details: ToolDetails) => onUpdate({ content: [{ type: "text", text: content }], details })
 			: undefined;
 
-		const hasChain = (params.chain?.length ?? 0) > 0;
-		const hasTasks = (params.tasks?.length ?? 0) > 0;
-		const hasSingle = params.task !== undefined || params.agent !== undefined;
-		const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
-
-		if (params.tasks?.length === 0 || params.chain?.length === 0) {
-			throw new Error("Invalid parameters: tasks and chain arrays must not be empty. Provide one single, parallel, or chain mode.");
+		const mode = (params as { mode?: unknown }).mode;
+		if (mode !== "single" && mode !== "parallel" && mode !== "chain") {
+			throw new Error("Invalid parameters: mode must be one of single, parallel, or chain.");
 		}
-		if (modeCount !== 1) {
-			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
-			throw new Error(`Invalid parameters: provide exactly one mode (single, parallel, or chain).\nAvailable agents: ${available}\nRaw prompts: omit the agent field to use the built-in default agent.`);
+		if (mode === "parallel" && (!Array.isArray((params as { tasks?: unknown }).tasks) || params.tasks.length === 0)) {
+			throw new Error("Invalid parameters: parallel mode requires a non-empty tasks array.");
 		}
-		if (hasSingle && (!params.task || params.task.trim().length === 0)) {
+		if (mode === "chain" && (!Array.isArray((params as { chain?: unknown }).chain) || params.chain.length === 0)) {
+			throw new Error("Invalid parameters: chain mode requires a non-empty chain array.");
+		}
+		if (mode === "single" && (typeof params.task !== "string" || params.task.trim().length === 0)) {
 			throw new Error("Missing task: provide a non-empty task string for single mode.");
 		}
-		if (hasTasks && params.tasks!.length > MAX_PARALLEL_TASKS) {
-			throw new Error(`Too many parallel tasks (${params.tasks!.length}). Max is ${MAX_PARALLEL_TASKS}; split the work across multiple subagent calls.`);
+		if (mode === "parallel" && params.tasks.length > MAX_PARALLEL_TASKS) {
+			throw new Error(`Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}; split the work across multiple subagent calls.`);
 		}
+
+		const tasks = mode === "parallel" ? params.tasks : [];
+		const chain = mode === "chain" ? params.chain : [];
 
 		// Pre-validate agents so we never spawn a partial batch with an unknown agent.
 		const unknownAgents = new Set<string>();
-		if (params.agent !== undefined && !resolveAgent(params.agent, agents)) unknownAgents.add(params.agent);
-		if (params.tasks) for (const t of params.tasks) if (t.agent !== undefined && !resolveAgent(t.agent, agents)) unknownAgents.add(t.agent);
-		if (params.chain) for (const c of params.chain) if (c.agent !== undefined && !resolveAgent(c.agent, agents)) unknownAgents.add(c.agent);
-		for (const item of [...(params.tasks ?? []), ...(params.chain ?? [])]) {
+		if (mode === "single" && params.agent !== undefined && !resolveAgent(params.agent, agents)) unknownAgents.add(params.agent);
+		for (const item of [...tasks, ...chain]) {
+			if (item.agent !== undefined && !resolveAgent(item.agent, agents)) unknownAgents.add(item.agent);
 			if (typeof item.task !== "string" || item.task.trim().length === 0) throw new Error("Missing task: every parallel task and chain step must have a non-empty task string.");
 		}
 		if (unknownAgents.size > 0) {
@@ -157,14 +178,14 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			getParentSessionId() && getJobsRoot()
 				? {
 					parentSessionId: getParentSessionId()!,
-					chain: hasChain ? persistChainSteps(params.chain!, params.cwd ?? ctx.cwd) : undefined,
+					chain: mode === "chain" ? persistChainSteps(chain, params.cwd ?? ctx.cwd) : undefined,
 				}
 				: undefined;
 
 		// ── Chain mode ──
-		if (hasChain) {
-			const job = createJob("chain", shouldNotify(wait, notifyOnComplete), emit, params.chain!.length, persist);
-			runChain(job, params.chain!, agents, params.cwd ?? ctx.cwd, modelCtx, wait ? signal : undefined);
+		if (mode === "chain") {
+			const job = createJob("chain", shouldNotify(wait, notifyOnComplete), emit, chain.length, persist);
+			runChain(job, chain, agents, params.cwd ?? ctx.cwd, modelCtx, wait ? signal : undefined);
 			if (!wait) {
 				return { content: [{ type: "text", text: spawnResultText(job, "chain") }], details: jobDetails(job) };
 			}
@@ -182,12 +203,12 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 		}
 
 		// ── Parallel mode ──
-		if (hasTasks) {
-			const tasksParam = params.tasks!;
+		if (mode === "parallel") {
+			const tasksParam = tasks;
 			const job = createJob("parallel", shouldNotify(wait, notifyOnComplete), emit, undefined, persist);
 			const releaseDispatch = holdTaskDispatch();
-			const planned = tasksParam.map((t) => ({ ...t, taskId: randomUUID() }));
-			const spawnPromises = planned.map(async (t) => {
+			const planned = tasksParam.map((t: any) => ({ ...t, taskId: randomUUID() }));
+			const spawnPromises = planned.map(async (t: any) => {
 				const agent = resolveAgent(t.agent, agents)!;
 				return spawnTask(agent, t.task, t.cwd ?? ctx.cwd, job.id, {
 					taskId: t.taskId, requestedTier: t.tier, tier: t.tier, name: t.name, modelCtx,
@@ -247,7 +268,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 	},
 
 	renderCall(args, theme, _context) {
-		if (args.chain && args.chain.length > 0) {
+		if (args.mode === "chain") {
 			let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", `chain (${args.chain.length} steps)`) + theme.fg("muted", args.wait === false ? " [async]" : "");
 			for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 				const step = args.chain[i];
@@ -258,7 +279,7 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 			if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
 			return new Text(text, 0, 0);
 		}
-		if (args.tasks && args.tasks.length > 0) {
+		if (args.mode === "parallel") {
 			let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", `parallel (${args.tasks.length} tasks)`) + theme.fg("muted", args.wait === false ? " [async]" : "");
 			for (const t of args.tasks.slice(0, 3)) {
 				const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;

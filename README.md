@@ -30,19 +30,22 @@ the `pi.extensions` entry in `package.json`.
 
 ```text
 # One task; omit agent to use the built-in general-purpose agent
-subagent { agent: "scout", task: "Find the authentication code", wait: true }
+subagent { mode: "single", agent: "scout", task: "Find the authentication code", wait: true }
 
 # Parallel batch (up to 8 accepted tasks; at most 4 child processes run at once)
-subagent { tasks: [{ agent: "scout", task: "Find models" }, { task: "Find providers" }], wait: true }
+subagent { mode: "parallel", tasks: [{ agent: "scout", task: "Find models" }, { task: "Find providers" }], wait: true }
 
 # Chain; {previous} is replaced with the previous step's full output
-subagent { chain: [{ agent: "scout", task: "Find the read tool" }, { task: "Suggest improvements to {previous}" }] }
+subagent { mode: "chain", chain: [{ agent: "scout", task: "Find the read tool" }, { task: "Suggest improvements to {previous}" }] }
 
 # Background work
-subagent { agent: "researcher", task: "Explore the codebase", wait: false }
+subagent { mode: "single", agent: "researcher", task: "Explore the codebase", wait: false }
 subagent_status { }
 subagent_wait { jobIds: ["<jobId>"] }
 ```
+
+Every `subagent` call requires a `mode` discriminator (`"single"`, `"parallel"`,
+or `"chain"`). The old flat input shapes without `mode` are not accepted.
 
 Parallel batches accept at most 8 tasks; more than 4 are queued until a
 scheduler slot is available. Queued tasks appear as queued in the live UI. The

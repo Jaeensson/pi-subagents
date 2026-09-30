@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { wrapRegisteredTool } from "@earendil-works/pi-coding-agent";
+import { Check } from "typebox/value";
 import { subagentTool } from "../tools/subagent.ts";
 import { subagentStatusTool } from "../tools/subagent-status.ts";
 import { subagentWaitTool } from "../tools/subagent-wait.ts";
@@ -23,19 +24,54 @@ function hostWrapped(tool) {
 function run(tool, params) {
 	return hostWrapped(tool).execute("tool-call", params, undefined, undefined, undefined);
 }
+function executeSubagent(params) {
+	return subagentTool.execute("tool-call", params, undefined, undefined, context);
+}
 
-test("invalid subagent mode rejects through Pi's registered-tool wrapper", async () => {
-	await assert.rejects(run(subagentTool, {}), /exactly one mode/);
+test("subagent schema accepts one explicit mode and rejects ambiguous shapes", () => {
+	const validCalls = [
+		{ mode: "single", task: "do work", wait: false },
+		{ mode: "parallel", tasks: [{ task: "do work" }], wait: false },
+		{ mode: "chain", chain: [{ task: "do work" }], wait: false },
+	];
+	for (const params of validCalls) assert.equal(Check(subagentTool.parameters, params), true);
+
+	assert.equal(Check(subagentTool.parameters, { agent: "worker", task: "legacy single" }), false);
+	assert.equal(Check(subagentTool.parameters, { tasks: [{ task: "legacy parallel" }] }), false);
+	assert.equal(Check(subagentTool.parameters, { chain: [{ task: "legacy chain" }] }), false);
+	assert.equal(Check(subagentTool.parameters, { task: "missing mode" }), false);
+	assert.equal(Check(subagentTool.parameters, { mode: "other", task: "unknown mode" }), false);
+	assert.equal(Check(subagentTool.parameters, { mode: "single", task: "single", tasks: [{ task: "wrong mode" }] }), false);
+	assert.equal(Check(subagentTool.parameters, { mode: "parallel", tasks: [] }), false);
+	assert.equal(Check(subagentTool.parameters, { mode: "chain", chain: [] }), false);
 });
 
-test("missing task and unknown agent reject rather than returning an isError-shaped success", async () => {
-	await assert.rejects(run(subagentTool, { agent: "worker" }), /Missing task/);
-	await assert.rejects(run(subagentTool, { agent: "no-such-agent", task: "do it" }), /Unknown agent/);
+test("invalid or incomplete modes reject before any task is spawned", async () => {
+	await assert.rejects(run(subagentTool, {}), /mode/i);
+	await assert.rejects(run(subagentTool, { agent: "no-such-agent", task: "legacy input" }), /mode/i);
+	await assert.rejects(executeSubagent({ mode: "unknown" }), /mode/i);
+	await assert.rejects(executeSubagent({ mode: "parallel" }), /non-empty tasks array|at least one task/i);
+	await assert.rejects(executeSubagent({ mode: "parallel", tasks: [] }), /non-empty tasks array|at least one task/i);
+	await assert.rejects(executeSubagent({ mode: "chain" }), /non-empty chain array|at least one step/i);
+	await assert.rejects(executeSubagent({ mode: "chain", chain: [] }), /non-empty chain array|at least one step/i);
+});
+
+test("missing tasks and unknown agents reject in every mode before spawning", async () => {
+	await assert.rejects(run(subagentTool, { mode: "single", agent: "worker" }), /Missing task/);
+	await assert.rejects(run(subagentTool, { mode: "single", agent: "no-such-agent", task: "do it" }), /Unknown agent/);
+	await assert.rejects(run(subagentTool, { mode: "parallel", tasks: [{ agent: "no-such-agent", task: "do it" }] }), /Unknown agent/);
+	await assert.rejects(run(subagentTool, { mode: "chain", chain: [{ agent: "no-such-agent", task: "do it" }] }), /Unknown agent/);
+});
+
+test("whitespace-only tasks reject in every mode before spawning", async () => {
+	await assert.rejects(run(subagentTool, { mode: "single", task: "  " }), /Missing task/);
+	await assert.rejects(run(subagentTool, { mode: "parallel", tasks: [{ task: "  " }] }), /non-empty task/);
+	await assert.rejects(run(subagentTool, { mode: "chain", chain: [{ task: "  " }] }), /non-empty task/);
 });
 
 test("parallel arrays above the supported limit reject before any spawn", async () => {
 	const tasks = Array.from({ length: 9 }, (_, i) => ({ task: `task ${i}` }));
-	await assert.rejects(run(subagentTool, { tasks }), /Too many parallel tasks/);
+	await assert.rejects(run(subagentTool, { mode: "parallel", tasks }), /Too many parallel tasks/);
 });
 
 test("unknown job identifiers consistently reject from status, wait, pause, and resume", async () => {
