@@ -29,6 +29,20 @@ import type { LiveTrace } from "./live.ts";
 export type TaskStatus = "running" | "completed" | "failed" | "aborted" | "paused" | "interrupted";
 export type JobMode = "single" | "parallel" | "chain";
 
+export interface JobCompletion {
+	id: string;
+	mode: JobMode;
+	status: Job["status"];
+	total: number;
+	unsuccessful: number;
+	notifyOnComplete: boolean;
+}
+
+export type RuntimeObservation =
+	| { type: "status" }
+	| { type: "trace"; taskId: string; generation: number }
+	| { type: "job-finished"; completion: JobCompletion };
+
 export interface Task {
 	id: string;
 	jobId: string;
@@ -177,6 +191,23 @@ export function getJobsRoot(): string | undefined {
 
 let runningCount = 0;
 let statusChangedHook: (() => void) | undefined;
+const runtimeObservers = new Set<(event: RuntimeObservation) => void | Promise<void>>();
+
+/** Subscribe to additive lifecycle observations. Owners must unsubscribe explicitly. */
+export function subscribeRuntimeObservations(listener: (event: RuntimeObservation) => void | Promise<void>): () => void {
+	runtimeObservers.add(listener);
+	return () => { runtimeObservers.delete(listener); };
+}
+
+function publishRuntimeObservation(event: RuntimeObservation): void {
+	for (const listener of runtimeObservers) {
+		try {
+			const result = listener(event);
+			if (result && typeof result.then === "function") void result.catch(() => {});
+		} catch { /* observers must not affect lifecycle work */ }
+	}
+}
+
 
 /** Install the UI refresh callback without introducing a runtime -> TUI edge. */
 export function setStatusChangedHook(fn: (() => void) | undefined): void {
@@ -185,6 +216,12 @@ export function setStatusChangedHook(fn: (() => void) | undefined): void {
 
 export function notifyStatusChanged(): void {
 	try { statusChangedHook?.(); } catch { /* UI may be tearing down */ }
+	publishRuntimeObservation({ type: "status" });
+}
+
+/** Publish a trace update only for a caller-validated current process attempt. */
+export function notifyTaskTraceChanged(taskId: string, generation: number): void {
+	publishRuntimeObservation({ type: "trace", taskId, generation });
 }
 
 /** Live count of running tasks (used by the status widget and shutdown sweep). */
@@ -430,7 +467,16 @@ export function checkJobComplete(job: Job) {
 	job.finished = true;
 	fireWaiters(jobWaiters, job.id);
 	maybeNotifyJob(job);
-	jobFinishedHook?.();
+	try { jobFinishedHook?.(); } catch { /* UI may be tearing down */ }
+	const completion = Object.freeze({
+		id: job.id,
+		mode: job.mode,
+		status: job.status,
+		total: job.tasks.length,
+		unsuccessful: job.tasks.filter((task) => task.status !== "completed").length,
+		notifyOnComplete: job.notifyOnComplete,
+	});
+	publishRuntimeObservation({ type: "job-finished", completion });
 }
 
 // ── Aggregation ──────────────────────────────────────────────────────────────

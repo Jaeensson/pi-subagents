@@ -17,7 +17,7 @@ import {
 	pauseJobTasks,
 } from "../process.ts";
 import { resumeJob } from "../jobs.ts";
-import { clearRegistry, getRunningCount, jobs, listRunningTasks, setJobsRoot, setParentSessionId, setStatusChangedHook, tasks, waitForJob, waitForTask } from "../runtime.ts";
+import { clearRegistry, getRunningCount, jobs, listRunningTasks, setJobsRoot, setParentSessionId, setStatusChangedHook, subscribeRuntimeObservations, tasks, waitForJob, waitForTask } from "../runtime.ts";
 import { manifestPath, readManifest, writeManifest } from "../store.ts";
 
 function makeJob(id) {
@@ -178,6 +178,30 @@ test("task manifest entry is flushed before the child process starts", async () 
 		fs.rmSync(root, { recursive: true, force: true });
 		cleanup();
 	}
+});
+
+test("runtime observations cover dispatch, accepted trace output, and finalized status", async () => {
+	cleanup();
+	const job = makeJob("observed-process");
+	jobs.set(job.id, job);
+	const events = [];
+	let widgetCalls = 0;
+	let child;
+	setStatusChangedHook(() => { widgetCalls++; });
+	const unsubscribe = subscribeRuntimeObservations((event) => events.push(event));
+	try {
+		await spawnTask(testAgent(), "watch me", process.cwd(), job.id, {
+			taskId: "observed-task", modelCtx: modelContext(), spawnProcess: () => (child = fakeChild()),
+		});
+		assert.ok(events.some((event) => event.type === "status"));
+		assert.ok(widgetCalls > 0, "legacy widget hook still runs beside observers");
+		child.stdout.emit("data", Buffer.from('{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n'));
+		assert.ok(events.some((event) => event.type === "trace" && event.taskId === "observed-task" && event.generation === tasks.get("observed-task").processGeneration));
+		closeChild(child);
+		assert.equal(await waitForJob(job.id), true);
+		assert.ok(events.filter((event) => event.type === "status").length >= 2);
+		assert.equal(tasks.get("observed-task").finalizing, false);
+	} finally { unsubscribe(); setStatusChangedHook(undefined); cleanup(); }
 });
 
 test("status hook is notified after queued task transitions to a running child", async () => {
@@ -534,6 +558,8 @@ test("resumed parallel batch of eight is limited to four live child processes", 
 
 test("pause and abort cancel queued parallel dispatch without losing resumable task entries", async () => {
 	cleanup();
+	const observedStatuses = [];
+	const unsubscribe = subscribeRuntimeObservations((event) => { if (event.type === "status") observedStatuses.push(event); });
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-parallel-cancel-test-"));
 	const { job, psid } = await createParallelFixture(root, "paused-parallel");
 	const release = (await import("../process.ts")).holdTaskDispatch();
@@ -547,6 +573,7 @@ test("pause and abort cancel queued parallel dispatch without losing resumable t
 		await waitUntil(() => job.tasks.every((task) => !task.finalizing));
 		assert.equal(spawnCalls, 0);
 		assert.ok(job.tasks.every((task) => task.status === "paused"));
+		assert.ok(observedStatuses.length >= 8, "queued pause settlement publishes status changes");
 		const pausedManifest = readManifest(root, psid, job.id);
 		assert.equal(pausedManifest.status, "running", "paused task snapshots must prevent terminal job status");
 		assert.equal(pausedManifest.tasks.filter((task) => task.status === "paused").length, 8);
@@ -570,6 +597,7 @@ test("pause and abort cancel queued parallel dispatch without losing resumable t
 		assert.equal(completed, false);
 		releaseAbort();
 		assert.ok(abortJob.tasks.every((task) => task.status === "aborted"));
+		assert.ok(observedStatuses.length >= 16, "queued abort settlement publishes status changes");
 		const manifest = readManifest(abortRoot, abortPsid, abortJob.id);
 		assert.equal(manifest.status, "aborted");
 		assert.ok(manifest.tasks.every((task) => task.status === "aborted"));
@@ -578,6 +606,7 @@ test("pause and abort cancel queued parallel dispatch without losing resumable t
 		releaseAbort();
 		fs.rmSync(abortRoot, { recursive: true, force: true });
 		cleanup();
+		unsubscribe();
 	}
 });
 

@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blocksResume, checkJobComplete, clearRegistry, jobs, setJobFinishedHook, setMessageSender, taskWaiters, tasks, toTaskInfo, waitForJob, waitForTask } from "../runtime.ts";
+import { blocksResume, checkJobComplete, clearRegistry, jobs, notifyStatusChanged, setJobFinishedHook, setMessageSender, subscribeRuntimeObservations, taskWaiters, tasks, toTaskInfo, waitForJob, waitForTask } from "../runtime.ts";
 
 /** Minimal fake job; checkJobComplete only reads the fields it needs. */
 function makeJob(id, mode = "single") {
@@ -71,6 +71,46 @@ test("timeout and abort remove their waiter closures; clearRegistry settles rema
 	assert.equal(taskWaiters.size, 0);
 });
 
+test("runtime observers are isolated, preserve hooks/waiters, and receive one immutable completion", async () => {
+	const events = [];
+	const failed = subscribeRuntimeObservations(() => { throw new Error("sync observer failure"); });
+	const second = subscribeRuntimeObservations((event) => events.push(event));
+	setJobFinishedHook(() => { throw new Error("legacy hook failure"); });
+	const job = makeJob("observer-job");
+	job.tasks = [{ id: "t1", jobId: job.id, status: "completed" }];
+	const waiting = waitForJob(job.id);
+	jobs.set(job.id, job);
+	try {
+		checkJobComplete(job);
+		checkJobComplete(job);
+		assert.equal(await waiting, true);
+		assert.equal(events.length, 1);
+		assert.deepEqual(events[0], { type: "job-finished", completion: {
+			id: job.id, mode: "single", status: "completed", total: 1, unsuccessful: 0, notifyOnComplete: false,
+		} });
+		assert.equal(Object.isFrozen(events[0].completion), true);
+	} finally {
+		failed(); second(); setJobFinishedHook(undefined); clearRegistry();
+	}
+});
+
+test("async observer rejections are handled and unsubscribe stops delivery", async () => {
+	let secondCalls = 0;
+	const unsubscribe = subscribeRuntimeObservations(() => Promise.reject(new Error("async observer failure")));
+	const second = subscribeRuntimeObservations(() => { secondCalls++; });
+	try {
+		const job = makeJob("unsub-job");
+		job.tasks = [{ status: "completed" }];
+		checkJobComplete(job);
+		unsubscribe();
+		second();
+		notifyStatusChanged();
+		checkJobComplete(job);
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(secondCalls, 1);
+	} finally { unsubscribe(); second(); }
+});
+
 test("job-finished hook fires once when a non-chain job completes", () => {
 	const calls = [];
 	setJobFinishedHook(() => calls.push("fired"));
@@ -88,8 +128,10 @@ test("job-finished hook fires once when a non-chain job completes", () => {
 	}
 });
 
-test("job-finished hook does NOT fire mid-chain (chainRunnerDone false) — the chain-gap regression", () => {
+test("job-finished hook and observers do NOT fire mid-chain (chainRunnerDone false) — the chain-gap regression", () => {
 	const calls = [];
+	const observations = [];
+	const unsubscribe = subscribeRuntimeObservations((event) => observations.push(event));
 	setJobFinishedHook(() => calls.push("fired"));
 	try {
 		const job = makeJob("j-chain", "chain");
@@ -98,7 +140,9 @@ test("job-finished hook does NOT fire mid-chain (chainRunnerDone false) — the 
 		checkJobComplete(job);
 		assert.equal(job.finished, false);
 		assert.deepEqual(calls, []);
+		assert.deepEqual(observations, []);
 	} finally {
+		unsubscribe();
 		setJobFinishedHook(undefined);
 	}
 });

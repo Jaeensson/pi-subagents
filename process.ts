@@ -37,6 +37,7 @@ import {
 	taskWaiters,
 	tasks,
 	notifyStatusChanged,
+	notifyTaskTraceChanged,
 	waitForJob,
 	type Job,
 	type ModelContext,
@@ -294,6 +295,7 @@ async function settleUnlaunchedTask(task: Task, status: "paused" | "aborted" | "
 	} finally {
 		task.finalizing = false;
 	}
+	updateStatus();
 	fireWaiters(taskWaiters, task.id);
 	if (job) checkJobComplete(job);
 }
@@ -336,6 +338,7 @@ async function finalizeTask(task: Task, code: number | null, signal: string | nu
 		} catch { /* best-effort */ }
 	}
 	task.finalizing = false;
+	updateStatus();
 	// Wake chain orchestration on pause, while waitForTask re-registers and
 	// continues waiting until the task is actually terminal.
 	fireWaiters(taskWaiters, task.id);
@@ -550,6 +553,7 @@ export async function spawnTask(
 							const message = event?.type === "message_end" ? event.message : undefined;
 							if (message?.role === "assistant" && Array.isArray(message.content) && getFinalOutput([message]))
 								task.outputProducedGeneration = processGeneration;
+							notifyTaskTraceChanged(task.id, processGeneration);
 						} catch { /* applyEventLine already ignored malformed events */ }
 						if (task.messages.length !== messageCount) boundTaskMessages(task);
 						if (job) emitJobUpdate(job, getFinalOutput(task.messages) || "(running...)");
