@@ -84,11 +84,11 @@ Inside the gate, resolve the calling pane using Herdr's current-pane API rather 
 
 ## Central monitoring
 
-Publish compact aggregate metadata on the actual parent pane. Use a unique source scoped to the parent activation, monotonically increasing report sequences, and expiring metadata. Counts come from the runtime registry, not from Herdr detection.
+Publish compact aggregate metadata on the actual parent pane. Use a unique source scoped to the parent activation, monotonically increasing report sequences, a fifteen-second metadata TTL, and a five-second refresh while there is session-local task information to display. With no tasks, leave parent presentation unchanged. Counts come from the runtime registry, not from Herdr detection.
 
 The summary includes executing, queued, paused, completed, and unsuccessful task counts. "Executing" requires actual dispatch, not merely `Task.status === "running"`, which also covers queued/setup work. Completed and unsuccessful counts are session-local totals; unsuccessful covers failed, aborted, and interrupted tasks. Paused tasks are separate.
 
-Store the summary as a metadata token and display it through metadata state labels, retaining the ordinary state name, for example `idle · 2 subagents running`. Supply labels for idle, working, blocked, done, and unknown. This is display customization only: it does not make an idle parent semantically working. Do not override the parent's agent name, title, native session reference, or resume command. Clear this source's presentation when integration is disabled or the session ends; TTL provides crash/disconnection recovery.
+Store the summary under the namespaced `subagent_summary` metadata token and display it through metadata state labels, retaining the ordinary state name, for example `idle · 2 subagents running`. Normalize display values to at most eighty characters. Do not clear unrelated metadata tokens. Supply labels for idle, working, blocked, done, and unknown. This is display customization only: it does not make an idle parent semantically working. Do not override the parent's agent name, title, native session reference, or resume command. Clear this source's presentation when integration is disabled or the session ends; TTL provides crash/disconnection recovery.
 
 The monitor never calls `report-agent`, `report-agent-session`, or `release-agent` on the parent. It must coexist with Herdr's official Pi integration if that integration is installed later.
 
@@ -100,11 +100,11 @@ On the first executing task, create an owned `Subagents` tab in the caller's wor
 
 Each slot holds at most one executing task. Reserve a slot synchronously before asynchronous layout operations so concurrent launches cannot overbook it. Reuse the oldest available completed/paused/unsuccessful slot before creating additional panes. Never evict an executing task's viewer. If all slots are occupied, skip additional viewers rather than blocking tasks.
 
-Viewer assignment is per task attempt (`task.id` plus `processGeneration`). A resumed attempt may reuse its previous available slot or obtain another. Assigning an attempt replaces all prior slot content, not just its status. Completed output remains until reuse, disablement, manual closure, or parent-session end. An inactive slot is available while a paused task awaits an explicit resume.
+Viewer assignment is per task attempt (`task.id` plus `processGeneration`). A resumed attempt may reuse its previous available slot or obtain another. Assigning an attempt replaces the entire slot snapshot with that task's projected trace, not just its status. A resumed task may retain its own earlier trace according to existing `Task.live` behavior; unrelated previous slot occupants must never remain visible. Completed output remains until reuse, disablement, manual closure, or parent-session end. An inactive slot is available while a paused task awaits an explicit resume.
 
 Closing a viewer pane manually never cancels its task. Mark the slot absent when Herdr reports it missing; do not recreate a manually closed viewer for the same attempt. A later attempt/task may allocate a replacement within the four-pane bound. An unavailable API response is not evidence that a pane is absent.
 
-Successful creation gives the adapter ownership of the returned pane ID, even if later setup fails. If setup cannot complete, roll back that pane best-effort. A tab is considered extension-owned only from its creation response. Ownership must not be inferred from labels.
+Successful creation gives the adapter ownership of the returned pane ID, even if later setup fails. If setup cannot complete, roll back that pane best-effort. A tab is considered extension-owned only from its creation response. Ownership must not be inferred from labels. Before reusing or closing a pane after viewer startup, inspect its occupant. If the user has replaced the viewer with unrelated foreground work, relinquish that slot rather than overwriting or closing the new work. Unavailable inspection does not authorize destructive cleanup.
 
 ## Snapshot and viewer behavior
 
@@ -117,13 +117,13 @@ Each slot snapshot includes:
 - bounded text/thinking/tool-call/tool-output segments and any pending stream;
 - truncation/disconnection indicators where applicable.
 
-Use the already bounded `Task.live` trace as the source. Serialize only data needed by the viewer; do not serialize the full task prompt, messages array, process objects, or Sets. Clamp display metadata and total snapshot size. Publish at most four snapshots per second per slot, coalescing intermediate changes, with a final status snapshot after task finalization. Do not synchronously serialize the whole trace on every token.
+Use the already bounded `Task.live` trace as the source. Serialize only data needed by the viewer; do not serialize the full task prompt, messages array, process objects, or Sets. Clamp display metadata and cap each serialized snapshot at 128 KiB, dropping the oldest segments and clipping oversized content while retaining valid JSON and an explicit truncation indicator. Publish at most four snapshots per second per slot, coalescing intermediate changes, with a final status snapshot after task finalization. Do not synchronously serialize the whole trace on every token.
 
 Create the directory with private permissions and files with mode `0600` where supported. Replace snapshots atomically so viewers never see partially written JSON. Keep at most the four current slot snapshots and bounded in-flight writes. Disk failure disables the affected viewer; there is no unbounded queue or durable monitoring archive.
 
-The viewer is a standalone lightweight Node entrypoint with no runtime Pi-package imports and no dependency on jobs/process/store modules. Use the same runnable Node installation available to the parent, and a packaged script path rather than a temporary product-code script. Launch commands contain executable/script/snapshot paths, not task text. Quoting must handle spaces and shell metacharacters on supported platforms.
+The viewer is a standalone lightweight JavaScript (`.mjs`) Node entrypoint with no runtime Pi-package imports and no dependency on jobs/process/store modules. Prefer the parent executable when it is Node; otherwise resolve a runnable Node executable from PATH inside the environment gate. If unavailable, skip viewers without affecting monitoring or tasks. Use a packaged script path rather than a temporary product-code script. Launch commands contain executable/script/snapshot paths, not task text. Quoting must handle spaces and shell metacharacters on supported platforms.
 
-It polls the slot snapshot, renders readable text/thinking/tool activity, shows exact task status, and keeps completed output visible. It adapts to terminal dimensions. It must remove ANSI/OSC/control sequences from untrusted content; only the viewer's own terminal rendering controls may be emitted. Existing watch-pane thinking visibility is preserved, but these files and panes remain local and private to the user's account.
+It polls the slot snapshot every 250 milliseconds, renders readable text/thinking/tool activity, shows exact task status, and keeps completed output visible. It adapts to terminal dimensions. It must remove ANSI/OSC/control sequences from untrusted content; only the viewer's own terminal rendering controls may be emitted. Existing watch-pane thinking visibility is preserved, but these files and panes remain local and private to the user's account.
 
 A viewer is read-only. Terminal input cannot steer a child or answer child extension dialogs. Herdr's agent prompt surface must not be advertised as an input channel for these viewers.
 
@@ -148,7 +148,7 @@ Observer callbacks schedule/coalesce work and return immediately. CLI commands u
 
 Capture an activation generation in asynchronous operations. Disablement or session shutdown invalidates it before awaiting cleanup. A late creation result must be recorded for cleanup, not resurrect the old activation. A late report/write must not overwrite a newer slot/task or recreate files after cleanup.
 
-Herdr commands time out after two seconds. Cleanup has an overall bounded budget and is independent of the existing durable interruption and child-reaping paths. Failures are caught at the integration boundary; warn at most once per activation rather than flooding the conversation. Do not reclassify a task because a viewer exits, a pane disappears, a report fails, or cleanup times out.
+Herdr commands time out after two seconds. Cleanup has an overall two-second budget, may issue independent pane cleanup commands concurrently, and is independent of the existing durable interruption and child-reaping paths. Timeout means best-effort cleanup can leave panes behind; it never delays or cancels durable task cleanup. Failures are caught at the integration boundary; warn at most once per activation rather than flooding the conversation. Do not reclassify a task because a viewer exits, a pane disappears, a report fails, or cleanup times out.
 
 On disablement/session end:
 
