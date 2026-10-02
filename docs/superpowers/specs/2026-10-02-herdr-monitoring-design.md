@@ -1,7 +1,7 @@
 # Optional Herdr monitoring and live viewers
 
 Date: 2026-10-02
-Status: Design approved in conversation; written specification awaiting user review.
+Status: Written specification approved by the user on 2026-10-02; implementation plan and execution method awaiting approval.
 
 ## Intent and agreed scope
 
