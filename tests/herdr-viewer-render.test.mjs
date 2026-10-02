@@ -27,18 +27,31 @@ test("renders within narrow terminal dimensions with grapheme-safe clipping", ()
   }
 });
 
-test("wraps flag and keycap emoji at their full cell width and clips only at grapheme boundaries", () => {
-  const snapshot = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 1, task: { id: "t", generation: 1, name: "", agent: "", status: "running", startedAt: 0 }, segments: [{ kind: "text", text: "🇸🇪🇳🇴1️⃣2️⃣👍🏽👨‍👩‍👧‍👦" }], truncated: false };
-  const lines = renderViewer(snapshot, { columns: 2, rows: 30, now: 1 });
-  const emoji = ["🇸🇪", "🇳🇴", "1️⃣", "2️⃣", "👍🏽", "👨‍👩‍👧‍👦"];
-  const emojiLines = lines.filter(line => emoji.some(grapheme => line.includes(grapheme)));
-  assert.ok(emoji.every(grapheme => lines.join("\n").includes(grapheme)));
-  assert.ok(emojiLines.every(line => [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(line)]
-    .filter(part => emoji.some(grapheme => part.segment === grapheme)).length === 1));
-  assert.ok(lines.every(line => physicalWidth(line) <= 2));
+test("fits independent physical-cell oracle across narrow widths and grapheme fixtures", () => {
+  const fixtures = ["界", "🙂", "e\u0301", "🇸🇪", "🇳🇴", "1️⃣", "2️⃣", "👍🏽", "👨‍👩‍👧‍👦"];
+  const snapshot = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 1, task: { id: "t", generation: 1, name: "", agent: "", status: "running", startedAt: 0 }, segments: [{ kind: "text", text: fixtures.join("") }], truncated: false };
+  for (const columns of [1, 2, 3, 7]) {
+    const rows = 50;
+    const lines = renderViewer(snapshot, { columns, rows, now: 1 });
+    assert.ok(lines.length <= rows, `output exceeds ${rows} rows at width ${columns}`);
+    assert.ok(lines.every(line => physicalWidth(line) <= columns), `line exceeds ${columns} cells: ${JSON.stringify(lines)}`);
+    assert.ok(lines.every(line => !/\x1b/.test(line)));
+  }
+  const wideLines = renderViewer(snapshot, { columns: 7, rows: 50, now: 1 });
+  assert.ok(fixtures.every(grapheme => wideLines.join("\n").includes(grapheme)));
 });
 
+// Independent fixture oracle: widths are explicit for every non-ASCII grapheme
+// emitted by these tests (not inferred from the renderer's Unicode categories).
 function physicalWidth(text) {
+  const widths = new Map([
+    ["界", 2], ["🙂", 2], ["e\u0301", 1], ["🇸🇪", 2], ["🇳🇴", 2],
+    ["1️⃣", 2], ["2️⃣", 2], ["👍🏽", 2], ["👨‍👩‍👧‍👦", 2], ["…", 1], ["·", 1],
+  ]);
   return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)]
-    .reduce((n, part) => n + (/\p{Extended_Pictographic}/u.test(part.segment) || /[\u{1F1E6}-\u{1F1FF}\u{1100}-\u{115F}\u{2E80}-\u{A4CF}\u{AC00}-\u{D7A3}\u{F900}-\u{FAFF}\u{FE10}-\u{FE6F}\u{FF00}-\u{FF60}\u{FFE0}-\u{FFE6}]/u.test(part.segment) ? 2 : 1), 0);
+    .reduce((cells, part) => {
+      const known = widths.get(part.segment);
+      assert.ok(known !== undefined || /^[\x20-\x7e]*$/.test(part.segment), `oracle has no width for ${JSON.stringify(part.segment)}`);
+      return cells + (known ?? part.segment.length);
+    }, 0);
 }

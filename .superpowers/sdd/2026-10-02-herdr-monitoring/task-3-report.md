@@ -32,3 +32,9 @@
 - TDD RED: `node --test tests/herdr-core.test.mjs tests/herdr-viewer-render.test.mjs` failed as expected: the oversized lone segment had zero segments, and the renderer lacked the standalone constants export (the emoji regression was added and also exposed the width issue).
 - Focused GREEN: `node --test tests/herdr-core.test.mjs tests/herdr-viewer-render.test.mjs` — 9 tests passed, 0 failed.
 - Typecheck: `npm run typecheck` — passed. `git diff --check` — passed.
+
+## Task 3 fix round 2
+- Replaced the renderer test's broad Unicode-category width guess with an independent grapheme fixture oracle: explicit cell widths for flags, keycaps, skin-tone and ZWJ emoji, CJK, combining text, and renderer punctuation; ASCII fixture characters count individually.
+- Exercised the combined grapheme fixture at widths 1, 2, 3, and 7, asserting every emitted line fits the explicit cell count and all output stays within the row limit. At width 7, all fixture graphemes are also asserted present. No production changes were needed.
+- Focused validation: `node --test tests/herdr-viewer-render.test.mjs tests/herdr-core.test.mjs` — 9 passed, 0 failed.
+- No MCP/code-graph coverage claim; exact-source fallback used as requested.
