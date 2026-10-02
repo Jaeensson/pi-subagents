@@ -9,7 +9,7 @@
   },
   "type": "module",
   "keywords": ["pi-package"],
-  "files": ["README.md", "LICENSE", "index.ts", "*.ts", "tools/*.ts", "agents/*.md"],
+  "files": ["README.md", "LICENSE", "index.ts", "*.ts", "*.mjs", "*.d.mts", "tools/*.ts", "agents/*.md"],
   "pi": {
     "extensions": ["./index.ts"]
   },
