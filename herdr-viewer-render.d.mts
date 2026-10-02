@@ -1,4 +1,11 @@
 import type { ViewerSnapshot } from "./herdr-core.ts";
+export const SNAPSHOT_VERSION: 1;
+export const SNAPSHOT_MAX_BYTES: 131072;
+export const PUBLISH_INTERVAL_MS: 250;
+export const VIEWER_POLL_MS: 250;
+export const HEARTBEAT_INTERVAL_MS: 2000;
+export const DISCONNECTED_AFTER_MS: 10000;
+export const EXIT_AFTER_MS: 30000;
 export function sanitizeText(text: string): string;
 export function parseSnapshot(raw: string): ViewerSnapshot | undefined;
 export function renderViewer(snapshot: ViewerSnapshot, options: { columns: number; rows: number; now: number; disconnected?: boolean }): string[];

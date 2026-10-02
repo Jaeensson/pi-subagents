@@ -24,3 +24,11 @@
 ## Concerns
 - Display cell-width handling is a deliberate lightweight Unicode approximation (grapheme segmentation plus common wide/CJK and emoji ranges), not a complete terminal-specific `wcwidth` implementation.
 - No runtime producer/viewer integration was introduced, per task scope.
+
+## Task 3 fix round 1
+- Corrected the snapshot mechanism: an oversized lone segment was dropped by the initial oldest-segment loop, so the later fallback that sliced from the front was unreachable. The loop now preserves the final segment and trims its start on Unicode code-point boundaries, retaining the newest tail and checking serialized UTF-8 size before returning.
+- Added focused regressions for a 140,000-character lone segment ending in `LATEST-TAIL🙂`, valid JSON, and the 128 KiB byte cap; and for flag/keycap/skin-tone/ZWJ emoji at narrow terminal width. Added width cases 1, 2, 3, and 7 with broader grapheme coverage.
+- Moved the shared protocol/timing constants into standalone `herdr-viewer-render.mjs`; declarations expose them and `herdr-core.ts` imports/re-exports the same values.
+- TDD RED: `node --test tests/herdr-core.test.mjs tests/herdr-viewer-render.test.mjs` failed as expected: the oversized lone segment had zero segments, and the renderer lacked the standalone constants export (the emoji regression was added and also exposed the width issue).
+- Focused GREEN: `node --test tests/herdr-core.test.mjs tests/herdr-viewer-render.test.mjs` — 9 tests passed, 0 failed.
+- Typecheck: `npm run typecheck` — passed. `git diff --check` — passed.

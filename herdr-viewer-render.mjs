@@ -1,3 +1,11 @@
+export const SNAPSHOT_VERSION = 1;
+export const SNAPSHOT_MAX_BYTES = 128 * 1024;
+export const PUBLISH_INTERVAL_MS = 250;
+export const VIEWER_POLL_MS = 250;
+export const HEARTBEAT_INTERVAL_MS = 2000;
+export const DISCONNECTED_AFTER_MS = 10000;
+export const EXIT_AFTER_MS = 30000;
+
 const STATUS = new Set(["running", "completed", "failed", "aborted", "paused", "interrupted"]);
 const KINDS = new Set(["text", "thinking", "toolCall", "toolOutput"]);
 
@@ -33,7 +41,8 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 function graphemes(text) { return [...segmenter.segment(text)].map(part => part.segment); }
 function cellWidth(g) {
   if (!g || /^\p{Mark}+$/u.test(g)) return 0;
-  if (/\p{Extended_Pictographic}/u.test(g) || /[\u{1100}-\u{115F}\u{2E80}-\u{A4CF}\u{AC00}-\u{D7A3}\u{F900}-\u{FAFF}\u{FE10}-\u{FE6F}\u{FF00}-\u{FF60}\u{FFE0}-\u{FFE6}]/u.test(g)) return 2;
+  if (/\p{Extended_Pictographic}/u.test(g) || /[\u{1F1E6}-\u{1F1FF}]/u.test(g) || /[#*0-9]\uFE0F?\u20E3/u.test(g) ||
+      /\p{Emoji_Presentation}/u.test(g) || /[\u{1100}-\u{115F}\u{2E80}-\u{A4CF}\u{AC00}-\u{D7A3}\u{F900}-\u{FAFF}\u{FE10}-\u{FE6F}\u{FF00}-\u{FF60}\u{FFE0}-\u{FFE6}]/u.test(g)) return 2;
   return 1;
 }
 function wrap(text, columns) {

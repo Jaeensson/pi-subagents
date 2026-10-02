@@ -52,6 +52,17 @@ test("snapshots project bounded display-only content without mutating live state
   assert.throws(() => projectSnapshot(task(), identity, Number.MAX_SAFE_INTEGER + 1, 100), /sequence/i);
 });
 
+test("oversized lone segment retains the latest UTF-8-safe tail within the serialized cap", () => {
+  const text = "A".repeat(140000) + "LATEST-TAIL🙂";
+  const snapshot = projectSnapshot(task({ live: { segments: [{ kind: "text", text }], pending: null } }), identity, 1, 100);
+  const encoded = encodeSnapshot(snapshot);
+  assert.ok(Buffer.byteLength(encoded, "utf8") <= SNAPSHOT_MAX_BYTES);
+  assert.equal(JSON.parse(encoded).truncated, true);
+  assert.ok(snapshot.segments.length > 0);
+  assert.ok(snapshot.segments.at(-1).text.endsWith("LATEST-TAIL🙂"));
+  assert.doesNotThrow(() => JSON.parse(encoded));
+});
+
 test("snapshot keeps latest content, pending segment, and nonnegative age inputs", () => {
   const snapshot = projectSnapshot(task({ startedAt: 200, live: { segments: [{ kind: "text", text: "old" }, { kind: "text", text: "latest" }], pending: { kind: "thinking", text: "thinking" } } }), identity, 1, 100);
   assert.deepEqual(snapshot.segments.map(s => s.text), ["old", "latest", "thinking"]);

@@ -1,12 +1,12 @@
 import type { Task } from "./runtime.ts";
-
-export const SNAPSHOT_VERSION = 1 as const;
-export const SNAPSHOT_MAX_BYTES = 128 * 1024;
-export const PUBLISH_INTERVAL_MS = 250;
-export const VIEWER_POLL_MS = 250;
-export const HEARTBEAT_INTERVAL_MS = 2000;
-export const DISCONNECTED_AFTER_MS = 10000;
-export const EXIT_AFTER_MS = 30000;
+import {
+  SNAPSHOT_VERSION, SNAPSHOT_MAX_BYTES, PUBLISH_INTERVAL_MS, VIEWER_POLL_MS,
+  HEARTBEAT_INTERVAL_MS, DISCONNECTED_AFTER_MS, EXIT_AFTER_MS,
+} from "./herdr-viewer-render.mjs";
+export {
+  SNAPSHOT_VERSION, SNAPSHOT_MAX_BYTES, PUBLISH_INTERVAL_MS, VIEWER_POLL_MS,
+  HEARTBEAT_INTERVAL_MS, DISCONNECTED_AFTER_MS, EXIT_AFTER_MS,
+} from "./herdr-viewer-render.mjs";
 
 export interface HerdrContext { binary: string; socketPath: string; callerPaneId: string }
 export interface PaneRef { paneId: string; tabId: string; workspaceId: string }
@@ -96,16 +96,24 @@ export function projectSnapshot(task: Task, identity: SlotIdentity, seq: number,
       ...(task.finishedAt !== undefined ? { finishedAt: task.finishedAt } : {}) },
     segments, truncated: (task.live?.dropped ?? 0) > 0,
   };
-  while (Buffer.byteLength(JSON.stringify(snapshot), "utf8") > SNAPSHOT_MAX_BYTES && segments.length > 0) {
+  while (Buffer.byteLength(JSON.stringify(snapshot), "utf8") > SNAPSHOT_MAX_BYTES && segments.length > 1) {
     segments = segments.slice(1);
     snapshot.segments = segments;
     snapshot.truncated = true;
   }
   if (Buffer.byteLength(JSON.stringify(snapshot), "utf8") > SNAPSHOT_MAX_BYTES) {
-    const excess = Buffer.byteLength(JSON.stringify(snapshot), "utf8") - SNAPSHOT_MAX_BYTES;
     const last = segments.at(-1);
     if (last) {
-      last.text = [...last.text].slice(0, Math.max(0, last.text.length - excess - 128)).join("");
+      const codepoints = [...last.text];
+      let low = 0;
+      let high = codepoints.length;
+      while (low < high) {
+        const keep = Math.ceil((low + high) / 2);
+        last.text = codepoints.slice(-keep).join("");
+        if (Buffer.byteLength(JSON.stringify(snapshot), "utf8") <= SNAPSHOT_MAX_BYTES) low = keep;
+        else high = keep - 1;
+      }
+      last.text = codepoints.slice(-low).join("");
       snapshot.truncated = true;
     }
   }
