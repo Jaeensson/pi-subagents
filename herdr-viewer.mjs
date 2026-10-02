@@ -17,51 +17,61 @@ export function runViewer(paths, supplied = {}) {
     wallNow: () => Date.now(), monotonicNow: () => performance.now(), setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: handle => clearInterval(handle), output: { size: () => ({ columns: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 }), write: frame => process.stdout.write(frame) }, pid: process.pid, ...supplied };
   const identity = paths.identity;
-  let lastSeq = -1; let lastAccepted = deps.monotonicNow(); let lastFrame = ""; let disconnected = true; let stopped = false; let running = false;
+  let lastSeq = -1; let lastAccepted = deps.monotonicNow(); let lastFrame = "";
   let lastIdentityAt = -Infinity;
-  let lastSize = "";
+  let acceptedSnapshot;
+  let stopped = false; let reading = false;
   let timer;
-  const stop = async () => { if (stopped) return; stopped = true; if (timer !== undefined) deps.clearInterval(timer); };
-  const tick = async () => {
-    if (stopped || running) return;
-    running = true;
+  let identityWrite;
+  let stopPromise;
+  const stop = () => {
+    if (stopPromise) return stopPromise;
+    stopped = true;
+    if (timer !== undefined) deps.clearInterval(timer);
+    return stopPromise = Promise.resolve(identityWrite).catch(() => {});
+  };
+  const expired = mono => {
+    if (mono - lastAccepted >= EXIT_AFTER_MS) void stop();
+    return stopped;
+  };
+  const render = mono => {
+    if (stopped || !acceptedSnapshot) return;
+    const value = acceptedSnapshot;
+    const disconnected = mono - lastAccepted >= DISCONNECTED_AFTER_MS;
+    const { columns, rows } = deps.output.size();
+    const frame = `\u001b[H\u001b[2J${renderViewer(value, { columns, rows, now: value.heartbeatAt, disconnected }).join("\n")}`;
+    if (frame !== lastFrame) deps.output.write(frame);
+    lastFrame = frame;
+  };
+  const read = async () => {
+    reading = true;
     try {
+      const raw = await deps.readFile(paths.snapshotPath);
+      if (stopped) return;
+      const value = parseSnapshot(raw);
+      // Validation and I/O may take time. Never accept a read after expiry.
       const mono = deps.monotonicNow();
-      try {
-        const raw = await deps.readFile(paths.snapshotPath);
-        const value = parseSnapshot(raw);
-        if (value && value.activationId === identity.activationId && value.slotId === identity.slotId && value.nonce === identity.nonce && value.seq > lastSeq) {
-          lastSeq = value.seq; lastAccepted = mono;
-          const age = mono - lastAccepted;
-          const isDisconnected = age >= DISCONNECTED_AFTER_MS;
-          const { columns, rows } = deps.output.size();
-          const lines = renderViewer(value, { columns, rows, now: isDisconnected ? value.heartbeatAt + DISCONNECTED_AFTER_MS + 1 : value.heartbeatAt, disconnected: isDisconnected });
-          const frame = `\u001b[H\u001b[2J${lines.join("\n")}`;
-          deps.output.write(frame); lastFrame = frame; disconnected = isDisconnected;
-        }
-      } catch {}
-      const since = mono - lastAccepted;
-      if (since >= EXIT_AFTER_MS) { await stop(); return; }
-      const isDisconnected = since >= DISCONNECTED_AFTER_MS;
-      if (lastSeq >= 0) {
-        try {
-          const { columns, rows } = deps.output.size();
-          const size = `${columns}x${rows}`;
-          if (isDisconnected !== disconnected || size !== lastSize) {
-            const raw = await deps.readFile(paths.snapshotPath); const value = parseSnapshot(raw);
-            if (value && value.seq === lastSeq && value.activationId === identity.activationId && value.slotId === identity.slotId && value.nonce === identity.nonce) {
-              const frame = `\u001b[H\u001b[2J${renderViewer(value, { columns, rows, now: isDisconnected ? value.heartbeatAt + DISCONNECTED_AFTER_MS + 1 : value.heartbeatAt, disconnected: isDisconnected }).join("\n")}`;
-              if (frame !== lastFrame) deps.output.write(frame);
-              lastFrame = frame; disconnected = isDisconnected; lastSize = size;
-            }
-          }
-        } catch {}
+      if (expired(mono)) return;
+      if (value && value.activationId === identity.activationId && value.slotId === identity.slotId && value.nonce === identity.nonce && value.seq > lastSeq) {
+        lastSeq = value.seq; lastAccepted = mono; acceptedSnapshot = value;
+        render(mono);
       }
-      if (mono - lastIdentityAt >= HEARTBEAT_INTERVAL_MS) {
-        lastIdentityAt = mono;
-        try { await deps.writeIdentity(paths.identityPath, { version: 1, ...identity, pid: deps.pid, heartbeatAt: deps.wallNow() }); } catch {}
-      }
-    } finally { running = false; }
+    } catch {} finally { reading = false; }
+  };
+  const tick = async () => {
+    if (stopped) return;
+    const mono = deps.monotonicNow();
+    if (expired(mono)) return;
+    render(mono);
+    // At most one read and one identity write; ticks never queue behind I/O.
+    if (!reading) void read();
+    if (!stopped && !identityWrite && mono - lastIdentityAt >= HEARTBEAT_INTERVAL_MS) {
+      lastIdentityAt = mono;
+      identityWrite = Promise.resolve().then(() => {
+        if (stopped) return;
+        return deps.writeIdentity(paths.identityPath, { version: 1, ...identity, pid: deps.pid, heartbeatAt: deps.wallNow() });
+      }).catch(() => {}).finally(() => { identityWrite = undefined; });
+    }
   };
   timer = deps.setInterval(() => tick().catch(() => {}), VIEWER_POLL_MS);
   return { stop };
