@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -36,6 +37,34 @@ test("settings writes reject unreadable, malformed, non-object and missing files
     assert.deepEqual(readdirSync(f.dir), []);
     assert.equal(readSettingsJson(path.join(f.dir, "missing.json")), undefined);
   } finally { f.cleanup(); }
+});
+
+test("settings write cleans up its temp file when rename fails", () => {
+  const f = fixture();
+  const require = createRequire(import.meta.url);
+  const fs = require("node:fs");
+  const originalRenameSync = fs.renameSync;
+  let renameCalls = 0;
+  try {
+    writeFileSync(f.file, JSON.stringify({ unchanged: true }));
+    fs.renameSync = () => {
+      renameCalls++;
+      throw new Error("controlled rename failure");
+    };
+    syncBuiltinESMExports();
+
+    const result = updateSettingsJson(f.file, (root) => { root.changed = true; });
+
+    assert.equal(renameCalls, 1, "update reached the controlled rename failure");
+    assert.equal(result.ok, false);
+    assert.match(result.error, /controlled rename failure/);
+    assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")), { unchanged: true });
+    assert.deepEqual(readdirSync(f.dir), ["settings.json"]);
+  } finally {
+    fs.renameSync = originalRenameSync;
+    syncBuiltinESMExports();
+    f.cleanup();
+  }
 });
 
 test("model tier writes preserve existing semantics and reject malformed or missing settings", () => {

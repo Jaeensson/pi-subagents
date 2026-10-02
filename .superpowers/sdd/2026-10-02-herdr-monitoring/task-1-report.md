@@ -25,3 +25,8 @@ Reviewed the `jobs.ts` refactor and settings helpers: model-tier update/removal 
 
 ## Concerns
 No known concerns. Full test count is six higher than the supplied baseline (270); the added suites contribute six tests.
+
+## Review follow-up — failed-write cleanup coverage
+- Added a controlled `renameSync` failure in `tests/settings.test.mjs`, after the real temp file has been created.
+- The test verifies rename was reached exactly once, the error is returned, the original settings remain unchanged, and the directory contains no temp-file debris.
+- Validation: `node --test tests/settings.test.mjs tests/herdr-settings.test.mjs` — 7 passed, 0 failed.
