@@ -47,6 +47,7 @@ interface Slot extends SlotState {
   task?: Task; epoch: number; identity: SlotIdentity; seq: number;
   original?: PaneRef; live?: PaneRef; launched: boolean; busy: boolean;
   paths?: { snapshotPath: string; identityPath: string };
+  store?: SnapshotStore; retiring?: Promise<void>; viewedKey?: string;
   lastPublish: number; lastContent?: string; lastReport: number; reportedState?: string;
 }
 type Inspection = { kind: "owned" | "shell"; pane: PaneRef; shell?: Shell } | { kind: "missing" | "foreign" | "unknown" };
@@ -62,7 +63,9 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
   };
   const clock = deps.clock;
   let stopped = false, warned = false, node: string | undefined, initialized = false;
-  let store: SnapshotStore | undefined, startup: Promise<void> | undefined, layoutBusy = false;
+  let startup: Promise<void> | undefined, layoutBusy = false;
+  let latestTasks: readonly Task[] = [];
+  const missingAttempts = new Set<string>();
   let timer: unknown, stopPromise: Promise<void> | undefined, parent = host.parent;
   let ownedTab: { tabId: string; workspaceId: string } | undefined;
   const cancelHandshakes = new Set<() => void>();
@@ -88,7 +91,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     slot.live = resolved.value;
     let identity: ViewerIdentity | undefined;
     if (slot.launched) {
-      identity = await store?.readIdentity(slot.index); guard(check);
+      identity = await slot.store?.readIdentity(slot.index); guard(check);
       // Validate even injected stores: mismatched identity never authorizes any pane operation.
       if (!identity || identity.version !== 1 || identity.activationId !== slot.identity.activationId || identity.slotId !== slot.index || identity.nonce !== slot.identity.nonce || !Number.isSafeInteger(identity.pid) || identity.pid <= 0) return { kind: "unknown" };
     }
@@ -134,9 +137,30 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     await port.closePane(inspection.pane.paneId); guard(check);
   }
   const rollback = (slot: Slot) => budget(async (port, check) => { await cleanupSlot(slot, port, check); guard(check); await closeEmptyTab(port, check); });
-  function unavailable(slot: Slot, message?: string) {
+  function unavailable(slot: Slot, message?: string, inspection?: Inspection) {
     slot.phase = "unavailable"; slot.epoch++;
     if (message) warn(message);
+    // Only authoritative absence suppresses the attempt actually shown by this
+    // physical reader, never a candidate assigned before ownership inspection.
+    if (inspection?.kind !== "missing" && inspection?.kind !== "foreign") return;
+    if (inspection.kind === "missing" && slot.viewedKey) missingAttempts.add(slot.viewedKey);
+    slot.task = undefined; slot.taskKey = undefined; slot.taskStatus = undefined;
+    // Missing and foreign panes are relinquished, not closed or used as anchors.
+    slot.original = undefined; slot.live = undefined;
+    if (slot.retiring) return;
+    const oldStore = slot.store;
+    slot.retiring = Promise.resolve().then(() => oldStore?.dispose()).then(() => {
+      if (!active()) return;
+      // Dispose must finish before allocating a replacement transport. Each of
+      // four positions has at most one live OR retiring store, even with held I/O.
+      slot.store = undefined; slot.paths = undefined; slot.launched = false;
+      slot.viewedKey = undefined; slot.seq = 0;
+      slot.identity = { activationId: host.activationId, slotId: slot.index, nonce: deps.nonce() };
+      slot.lastPublish = -Infinity; slot.lastReport = -Infinity;
+      slot.lastContent = undefined; slot.reportedState = undefined;
+      slot.phase = "empty"; slot.availableSince = clock.monotonicNow();
+      reconcile(latestTasks, parent);
+    }).catch(() => { warn("viewer transport retirement failed"); }).finally(() => { slot.retiring = undefined; });
   }
 
   async function publish(slot: Slot, epoch: number, force = false): Promise<boolean> {
@@ -149,7 +173,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     if (!force && content === slot.lastContent && now - slot.lastPublish < 2000) return false;
     snapshot.seq = ++slot.seq; // Never reset for task reuse; the physical viewer rejects decreases.
     slot.lastPublish = now;
-    try { await store!.publish(slot.index, snapshot, check); }
+    try { await slot.store!.publish(slot.index, snapshot, check); }
     catch (error) {
       // A disk failure belongs to the physical transport, even if its task epoch
       // changed while I/O was held. Never let reassignment mask a broken reader.
@@ -160,6 +184,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     }
     guard(check);
     slot.lastContent = content;
+    if (slot.launched) slot.viewedKey = slot.taskKey;
     return true;
   }
   async function report(slot: Slot, epoch: number, inspected?: Inspection): Promise<void> {
@@ -168,7 +193,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     if (slot.reportedState === state && clock.monotonicNow() - slot.lastReport < 2000) return;
     const port = api.scoped(check);
     const result = inspected ?? await inspect(slot, port, check); guard(check);
-    if (result.kind !== "owned") { unavailable(slot, "viewer ownership unavailable"); return; }
+    if (result.kind !== "owned") { unavailable(slot, "viewer ownership unavailable", result); return; }
     const sent = await port.viewerState(result.pane.paneId, state, source, nextReportSeq()); guard(check);
     if (!sent.ok) { unavailable(slot, "viewer report unavailable"); return; }
     slot.reportedState = state; slot.lastReport = clock.monotonicNow();
@@ -203,27 +228,29 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     const port = api.scoped(check);
     const inspection = await inspect(slot, port, check); guard(check);
     if (slot.launched) {
-      if (inspection.kind !== "owned") { unavailable(slot, "viewer ownership unavailable"); return; }
+      if (inspection.kind !== "owned") { unavailable(slot, "viewer ownership unavailable", inspection); return; }
       slot.phase = "ready";
       await publish(slot, epoch); guard(check);
       await report(slot, epoch); guard(check);
       return;
     }
-    if (inspection.kind !== "shell") { unavailable(slot, "unsupported or unknown viewer shell"); return; }
-    slot.paths ??= await store!.openSlot(slot.identity); guard(check);
+    if (inspection.kind !== "shell") { unavailable(slot, "unsupported or unknown viewer shell", inspection); return; }
+    slot.store ??= deps.storeFactory();
+    slot.paths ??= await slot.store.openSlot(slot.identity); guard(check);
     // Write the first current task before launching; publication failures never launch a reader.
     if (!await publish(slot, epoch, true)) return;
     guard(check);
     // Reinspect after file I/O: users may have replaced the new shell in the meantime.
     const beforeLaunch = await inspect(slot, port, check); guard(check);
-    if (beforeLaunch.kind !== "shell") { unavailable(slot, "viewer shell changed"); return; }
+    if (beforeLaunch.kind !== "shell") { unavailable(slot, "viewer shell changed", beforeLaunch); return; }
     const command = buildViewerCommand(node!, deps.viewerScriptPath, slot.paths.snapshotPath, slot.paths.identityPath, slot.identity, beforeLaunch.shell!);
     if (!command) { unavailable(slot, "viewer command unsupported"); return; }
     slot.launched = true; // An issued command may start even if its response later fails.
+    slot.viewedKey = slot.taskKey;
     const launched = await port.runViewer(beforeLaunch.pane.paneId, command); guard(check);
     if (!launched.ok) { unavailable(slot, "viewer launch unavailable"); return; }
     const owned = await handshake(slot, epoch); guard(check);
-    if (owned.kind !== "owned") { unavailable(slot, "viewer handshake unavailable"); return; }
+    if (owned.kind !== "owned") { unavailable(slot, "viewer handshake unavailable", owned); return; }
     slot.phase = "ready";
     await report(slot, epoch, owned); guard(check);
   }
@@ -252,18 +279,28 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
         const check = () => current(slot, epoch);
         const port = api.scoped(check);
         let pane: PaneRef;
-        if (slot.index === 0) {
+        const preferred = slots[slot.index === 3 ? 1 : 0];
+        let anchor: PaneRef | undefined, unknownAnchor = false;
+        // Keep the initial quad layout; replacements may use another proven
+        // owned peer, never a foreign pane, a label, or a destination tab.
+        for (const candidate of [preferred, ...slots.filter(s => s !== preferred)]) {
+          if (candidate === slot || !candidate.original) continue;
+          const inspected = await inspect(candidate, port, check); guard(check);
+          if (inspected.kind === "unknown") unknownAnchor = true;
+          if ((inspected.kind === "owned" || inspected.kind === "shell") && ownedTab && inspected.pane.tabId === ownedTab.tabId && inspected.pane.workspaceId === ownedTab.workspaceId) { anchor = inspected.pane; break; }
+        }
+        if (anchor) {
+          const created = await port.splitPane(anchor.paneId, slot.index === 1 ? "right" : "down", host.cwd);
+          if (!created.ok) { if (active()) unavailable(slot, "viewer split unavailable"); continue; }
+          pane = created.value;
+        } else {
+          if (unknownAnchor) { unavailable(slot, "viewer layout ownership unavailable"); continue; }
+          // No safe anchor remains (e.g. the sole pane was relinquished).
+          // Only a fresh authoritative creation may establish a new owned tab.
           const created = await port.createTab(parent.workspaceId, host.cwd);
           if (!created.ok) { if (active()) unavailable(slot, "viewer tab creation unavailable"); return; }
           ownedTab = { tabId: created.value.tabId, workspaceId: created.value.rootPane.workspaceId };
           pane = created.value.rootPane;
-        } else {
-          const anchor = slots[slot.index === 3 ? 1 : 0];
-          const inspected = await inspect(anchor, port, check); guard(check);
-          if ((inspected.kind !== "owned" && inspected.kind !== "shell") || !ownedTab || inspected.pane.tabId !== ownedTab.tabId || inspected.pane.workspaceId !== ownedTab.workspaceId) { unavailable(slot, "viewer layout ownership unavailable"); continue; }
-          const created = await port.splitPane(inspected.pane.paneId, slot.index === 1 ? "right" : "down", host.cwd);
-          if (!created.ok) { if (active()) unavailable(slot, "viewer split unavailable"); continue; }
-          pane = created.value;
         }
         slot.original = pane; slot.live = pane;
         // Authoritative creation IDs survive invalidation; only safe rollback may use them.
@@ -282,45 +319,46 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     startup = (async () => {
       node = await deps.resolveNode(); if (!active()) return;
       if (!node) { for (const slot of slots) if (slot.phase === "reserved") unavailable(slot); warn("Node unavailable for viewers"); return; }
-      store = deps.storeFactory(); if (!active()) { void store.dispose().catch(() => {}); return; }
       initialized = true;
       timer = clock.setInterval(() => { if (!active()) return; for (const slot of slots) service(slot); void createLayout(); }, 250);
       await createLayout();
     })().catch(() => { if (active()) { for (const slot of slots) if (slot.phase === "reserved") unavailable(slot); warn("viewer startup unavailable"); } });
   }
+  function reconcile(tasks: readonly Task[], nextParent: PaneRef) {
+    if (!active()) return;
+    latestTasks = tasks;
+    parent = nextParent;
+    // Update all executing flags BEFORE choosing a slot; never evict a running attempt.
+    for (const slot of slots) {
+      if (!slot.task || slot.phase === "unavailable") continue;
+      const latest = tasks.find(t => t.id === slot.task!.id);
+      if (!latest) continue; // Retain final output for an inactive slot.
+      const key = attemptKey(latest);
+      if (key !== slot.taskKey) {
+        slot.epoch++; slot.taskKey = key; slot.lastContent = undefined; slot.reportedState = undefined;
+        if (slot.phase === "ready") slot.phase = "reserved";
+      }
+      slot.task = latest;
+      if (slot.taskStatus === "running" && latest.status !== "running") slot.availableSince = clock.monotonicNow();
+      slot.taskStatus = latest.status;
+    }
+    for (const task of tasks) {
+      if (task.status !== "running" || task.setupPending || task.dispatchState === "queued") continue;
+      const key = attemptKey(task);
+      if (missingAttempts.has(key) || slots.some(s => s.taskKey === key)) continue;
+      const choice = chooseSlot(slots);
+      if (choice.kind === "full") continue;
+      const slot = slots[choice.index];
+      // Reserve synchronously; pending layout cannot overbook this slot on another reconcile.
+      slot.phase = "reserved"; slot.task = task; slot.taskKey = key; slot.taskStatus = task.status; slot.epoch++;
+      slot.lastContent = undefined; slot.reportedState = undefined;
+    }
+    if (!slots.some(s => s.phase === "reserved" || s.phase === "ready")) return;
+    start();
+    if (initialized) { for (const slot of slots) service(slot); void createLayout(); }
+  }
   return {
-    reconcile(tasks, nextParent) {
-      if (!active()) return;
-      parent = nextParent;
-      // Update all executing flags BEFORE choosing a slot; never evict a running attempt.
-      for (const slot of slots) {
-        if (!slot.task || slot.phase === "unavailable") continue;
-        const latest = tasks.find(t => t.id === slot.task!.id);
-        if (!latest) continue; // Retain final output for an inactive slot.
-        const key = attemptKey(latest);
-        if (key !== slot.taskKey) {
-          slot.epoch++; slot.taskKey = key; slot.lastContent = undefined; slot.reportedState = undefined;
-          if (slot.phase === "ready") slot.phase = "reserved";
-        }
-        slot.task = latest;
-        if (slot.taskStatus === "running" && latest.status !== "running") slot.availableSince = clock.monotonicNow();
-        slot.taskStatus = latest.status;
-      }
-      for (const task of tasks) {
-        if (task.status !== "running" || task.setupPending || task.dispatchState === "queued") continue;
-        const key = attemptKey(task);
-        if (slots.some(s => s.taskKey === key)) continue;
-        const choice = chooseSlot(slots);
-        if (choice.kind === "full") continue;
-        const slot = slots[choice.index];
-        // Reserve synchronously; pending layout cannot overbook this slot on another reconcile.
-        slot.phase = "reserved"; slot.task = task; slot.taskKey = key; slot.taskStatus = task.status; slot.epoch++;
-        slot.lastContent = undefined; slot.reportedState = undefined;
-      }
-      if (!slots.some(s => s.phase === "reserved" || s.phase === "ready")) return;
-      start();
-      if (initialized) { for (const slot of slots) service(slot); void createLayout(); }
-    },
+    reconcile,
     stop() {
       if (stopPromise) return stopPromise;
       stopped = true;
@@ -331,7 +369,9 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
       stopPromise = budget(async (port, check) => {
         await Promise.allSettled(slots.filter(s => s.original).map(s => cleanupSlot(s, port, check)));
         guard(check); await closeEmptyTab(port, check);
-      }).then(async () => { await store?.dispose(); });
+      }).then(async () => {
+        await Promise.all(slots.map(async slot => { await slot.retiring; await slot.store?.dispose(); }));
+      });
       return stopPromise;
     },
   };

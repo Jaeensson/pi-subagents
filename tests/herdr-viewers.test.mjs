@@ -27,21 +27,27 @@ const ref = (id, tab = "owned") => ({ paneId: id, tabId: tab, workspaceId: "w" }
 const envelope = value => JSON.stringify({ id: "cli:test", result: { type: "test", ...value } });
 const wire = p => ({ pane_id: p.paneId, tab_id: p.tabId, workspace_id: p.workspaceId });
 function harness(options = {}) {
-  const time = clock(), calls = [], panes = new Map(), moved = new Map(), occupants = new Map(), identities = new Map(), snapshots = [], writes = [];
-  const creation = options.creation; let current = true, tabs = 0, splits = 0, nonce = 0, disposed = false;
+  const time = clock(), calls = [], panes = new Map(), moved = new Map(), occupants = new Map(), identities = new Map(), snapshots = [], writes = [], paneViewers = new Map();
+  const creation = options.creation; let current = true, tabs = 0, splits = 0, nonce = 0;
   let publications = 0;
-  const store = options.realStore ? createSnapshotStore({ tempRoot: options.realStore, fs: options.transportFs }) : options.store ?? {
+  const stores = [];
+  const storeFactory = () => {
+    let disposed = false;
+    const store = options.realStore ? createSnapshotStore({ tempRoot: options.realStore, fs: options.transportFs }) : options.store ?? {
     async openSlot(identity) { identities.set(identity.slotId, { version: 1, ...identity, pid: 100 + identity.slotId, heartbeatAt: time.wallNow() }); return { snapshotPath: `/private/slot-${identity.slotId}.json`, identityPath: `/private/id-${identity.slotId}.json` }; },
     async publish(slot, snapshot, guard) { writes.push(snapshot); publications++; if (options.write) await options.write.promise; if (options.holdPublication === publications) await options.publicationGate.promise; if (options.failPublication === publications) throw new Error("disk full"); if (options.diskFail || options.failSlot === slot) throw new Error("disk full"); if (!disposed && guard()) snapshots.push(snapshot); },
     async readIdentity(slot) { if (options.delayedIdentity && time.wallNow() < 1250) return; const i = identities.get(slot); return i && { ...i, heartbeatAt: options.stale ? 0 : time.wallNow() }; },
     async dispose() { disposed = true; },
+    };
+    stores.push(store);
+    return store;
   };
   const api = createHerdrAdapter({ binary: "fake-herdr", socketPath: "/socket", callerPaneId: "parent" }, async (_, args, env) => {
     calls.push({ args, caller: env.env.HERDR_PANE_ID, at: time.wallNow() });
     if (options.holdVerb === args[1]) await options.hold.promise;
     if (options.onCommand) await options.onCommand(args);
-    if (args[0] === "tab" && args[1] === "create") { tabs++; if (creation) await creation.promise; const p = ref("p0"); panes.set(p.paneId, p); return envelope({ tab: { tab_id: "owned" }, root_pane: wire(p) }); }
-    if (args[1] === "split") { const p = ref(`p${++splits}`); if (options.splitGate) await options.splitGate.promise; panes.set(p.paneId, p); return envelope({ pane: wire(p) }); }
+    if (args[0] === "tab" && args[1] === "create") { tabs++; if (creation) await creation.promise; const p = ref(tabs === 1 ? "p0" : `root${tabs}`, tabs === 1 ? "owned" : `owned${tabs}`); panes.set(p.paneId, p); return envelope({ tab: { tab_id: p.tabId }, root_pane: wire(p) }); }
+    if (args[1] === "split") { const p = ref(`p${++splits}`, panes.get(args[2])?.tabId); if (options.splitGate) await options.splitGate.promise; panes.set(p.paneId, p); return envelope({ pane: wire(p) }); }
     if (args[1] === "current") { const id = env.env.HERDR_PANE_ID; const p = id === "parent" ? ref("parent", "parent-tab") : panes.get(moved.get(id) ?? id); if (!p) return JSON.stringify({ id: "x", error: { code: options.lookupFailure ?? "pane_not_found", message: "lookup failed" } }); return envelope({ pane: wire(p) }); }
     if (args[1] === "process-info") { const id = args.at(-1); const custom = occupants.get(id); return envelope({ process_info: { pane_id: id, shell_pid: 7, foreground_processes: custom ?? [{ pid: 7, name: options.shell ?? "bash" }] } }); }
     if (args[1] === "run") {
@@ -56,15 +62,15 @@ function harness(options = {}) {
           pid: 100 + slot, wallNow: time.wallNow, monotonicNow: time.monotonicNow,
           setInterval: time.setInterval, clearInterval: time.clearInterval,
           output: { size: () => ({ columns: 80, rows: 24 }), write: frame => options.frames.push(frame) },
-        }); options.viewers.push(viewer);
+        }); options.viewers.push(viewer); paneViewers.set(id, viewer);
       }
     }
     if (args[0] === "pane" && args[1] === "list") return envelope({ panes: [...panes.values()].map(wire) });
-    if (args[0] === "pane" && args[1] === "close") panes.delete(args[2]);
+    if (args[0] === "pane" && args[1] === "close") { panes.delete(args[2]); await paneViewers.get(args[2])?.stop(); }
     return envelope({});
   });
-  const manager = createViewerManager({ adapter: api, parent: ref("parent", "parent-tab"), cwd: "/tmp", activationId: "a", isCurrent: () => current, warn: message => calls.push({ warning: message }) }, { clock: time, storeFactory: () => store, resolveNode: async () => options.noNode ? undefined : "/node ' $()", viewerScriptPath: "/viewer ' $().mjs", nonce: () => `n${++nonce}`, execPath: "/bun" });
-  return { manager, time, calls, panes, moved, occupants, identities, snapshots, writes, disable: () => { current = false; }, counts: () => ({ tabs, splits }), parent: ref("parent", "parent-tab") };
+  const manager = createViewerManager({ adapter: api, parent: ref("parent", "parent-tab"), cwd: "/tmp", activationId: "a", isCurrent: () => current, warn: message => calls.push({ warning: message }) }, { clock: time, storeFactory, resolveNode: async () => options.noNode ? undefined : "/node ' $()", viewerScriptPath: "/viewer ' $().mjs", nonce: () => `n${++nonce}`, execPath: "/bun" });
+  return { manager, time, calls, panes, moved, occupants, identities, snapshots, writes, stores, disable: () => { current = false; }, counts: () => ({ tabs, splits }), parent: ref("parent", "parent-tab") };
 }
 const commands = (h, verb) => h.calls.filter(c => c.args?.[1] === verb);
 
@@ -117,7 +123,7 @@ test("moved viewer resolves original identity for reports/reuse/cleanup and neve
   assert.equal(h.panes.has("user"), true); assert.equal(h.calls.some(c => c.args?.[0] === "tab" && c.args[1] === "close" && c.args[2] === "destination"), false);
 });
 
-for (const occupant of ["unknown", "foreign", "mismatched-identity"]) test(`${occupant} occupant forbids relaunch/release/destruction`, async () => {
+for (const occupant of ["unknown", "mismatched-identity"]) test(`${occupant} occupant forbids relaunch/release/destruction`, async () => {
   const h = harness(), t = task("t"); h.manager.reconcile([t], h.parent); await flush();
   if (occupant === "unknown") h.occupants.set("p0", []);
   if (occupant === "foreign") h.occupants.set("p0", [{ pid: 800, name: "editor" }]);
@@ -148,8 +154,9 @@ test("publication is throttled to four per second and retained output gets two-s
 test("held reuse publication must reinspect ownership before reporting the new task", async () => {
   const publicationGate = deferred(), h = harness({ holdPublication: 2, publicationGate }), t = task("old"); h.manager.reconcile([t], h.parent); await flush();
   t.status = "completed"; h.manager.reconcile([t, task("new")], h.parent); await h.time.advance(250);
-  h.occupants.set("p0", [{ pid: 900, name: "editor" }]); const reports = commands(h, "report-agent").length;
-  publicationGate.resolve(); await flush(); assert.equal(commands(h, "report-agent").length, reports); await h.manager.stop(); assert.equal(commands(h, "close").length, 0);
+  h.occupants.set("p0", [{ pid: 900, name: "editor" }]); const reports = commands(h, "report-agent").filter(c => c.args[2] === "p0").length;
+  publicationGate.resolve(); await flush(); assert.equal(commands(h, "report-agent").filter(c => c.args[2] === "p0").length, reports);
+  await h.manager.stop(); assert.equal(commands(h, "close").some(c => c.args[2] === "p0"), false);
 });
 
 test("a failed old-generation write disables the physical slot even after reassignment", async () => {
@@ -159,10 +166,10 @@ test("a failed old-generation write disables the physical slot even after reassi
   assert.equal(h.writes.length, 2); assert.equal(t.status, "running"); await h.manager.stop();
 });
 
-test("a new attempt after a manually closed right viewer may use a fresh empty physical slot", async () => {
+test("a new attempt after a manually closed right viewer uses fresh transport", async () => {
   const h = harness(), a = task("a"), b = task("b"); h.manager.reconcile([a, b], h.parent); await flush(); h.panes.delete("p1"); await h.time.advance(2000);
   b.processGeneration = 2; h.manager.reconcile([a, b], h.parent); await h.time.advance(500);
-  assert.equal(commands(h, "run").length, 3); assert.equal(h.snapshots.at(-1).task.generation, 2); assert.equal(h.snapshots.at(-1).slotId, 2); await h.manager.stop();
+  assert.equal(commands(h, "run").length, 3); assert.equal(h.snapshots.at(-1).task.generation, 2); assert.equal(h.snapshots.at(-1).slotId, 1); await h.manager.stop();
 });
 
 test("snapshot disk failure disables only the affected viewer and never retries blind creation", async () => {
@@ -193,11 +200,12 @@ test("initial layout must not require a viewer identity before the helper has wr
 
 test("real transport/helper handshake does not prevent four initial shell splits", async () => {
   const files = new Map(), viewers = [], frames = [];
-  const transportFs = { mkdtemp: async () => "/private", chmod: async () => {},
+  let directory = 0;
+  const transportFs = { mkdtemp: async () => `/private/${++directory}`, chmod: async () => {},
     writeFile: async (file, raw) => { files.set(file, raw); },
     readFile: async file => { if (!files.has(file)) throw new Error("missing"); return files.get(file); },
     rename: async (a, b) => { files.set(b, files.get(a)); files.delete(a); },
-    rm: async (file, options) => { if (options?.recursive) files.clear(); else files.delete(file); },
+    rm: async (file, options) => { if (options?.recursive) { for (const key of files.keys()) if (key.startsWith(`${file}/`)) files.delete(key); } else files.delete(file); },
   };
   const h = harness({ realStore: "/private", transportFs, viewers, frames });
   try {
@@ -207,6 +215,140 @@ test("real transport/helper handshake does not prevent four initial shell splits
     assert.equal(commands(h, "report-agent").length, 4); assert.ok(frames.some(frame => frame.includes("worker")));
     await h.manager.stop(); assert.equal(files.size, 0);
   } finally { await h.manager.stop(); await Promise.all(viewers.map(v => v.stop())); }
+});
+
+function realComposition(options = {}) {
+  const files = new Map(), viewers = [], frames = [], directories = [], writes = [], removals = [];
+  const transportFs = {
+    mkdtemp: async () => { const dir = `/private/transport-${directories.length + 1}`; directories.push(dir); return dir; },
+    chmod: async () => {},
+    writeFile: async (file, raw) => { files.set(file, raw); writes.push(file); },
+    readFile: async file => { if (!files.has(file)) throw new Error("missing"); return files.get(file); },
+    rename: async (a, b) => { files.set(b, files.get(a)); files.delete(a); },
+    rm: async (file, opts) => {
+      if (opts?.recursive) {
+        removals.push(file);
+        if (file === options.heldDirectory) await options.retirement.promise;
+        for (const key of files.keys()) if (key.startsWith(`${file}/`)) files.delete(key);
+      } else files.delete(file);
+    },
+  };
+  const h = harness({ realStore: "/private", transportFs, viewers, frames });
+  return { ...h, files, viewers, directories, transportWrites: writes, removals,
+    async finish() { await h.manager.stop(); await Promise.all(viewers.map(v => v.stop())); } };
+}
+const snapshotsOnDisk = h => [...h.files.entries()].filter(([file]) => /slot-\d+\.json$/.test(file)).map(([file, raw]) => ({ file, snapshot: JSON.parse(raw) }));
+
+test("real composition replaces a missing fourth occupied position with fresh nonce/paths and preserves healthy peers", async () => {
+  const h = realComposition(), tasks = [task("a"), task("b"), task("c"), task("d")];
+  try {
+    h.manager.reconcile(tasks, h.parent); await flush(); await h.time.advance(1000);
+    const initial = snapshotsOnDisk(h).sort((a, b) => a.snapshot.slotId - b.snapshot.slotId);
+    assert.equal(initial.length, 4);
+    h.panes.delete("p3"); await h.time.advance(2000);
+    for (let i = 0; i < 3; i++) h.manager.reconcile(tasks, h.parent);
+    await flush(); assert.equal(commands(h, "run").length, 4, "missing old attempt stays suppressed");
+    tasks[3] = task("d", { processGeneration: 2 });
+    h.manager.reconcile(tasks, h.parent); await h.time.advance(1000);
+    assert.equal(commands(h, "run").length, 5);
+    const fresh = snapshotsOnDisk(h).find(p => p.snapshot.slotId === 3);
+    assert.equal(fresh.snapshot.task.generation, 2);
+    assert.notEqual(fresh.snapshot.nonce, initial[3].snapshot.nonce);
+    assert.notEqual(fresh.file, initial[3].file);
+    assert.equal(h.files.has(initial[3].file), false);
+    for (const peer of initial.slice(0, 3)) {
+      const snapshot = JSON.parse(h.files.get(peer.file));
+      assert.equal(snapshot.nonce, peer.snapshot.nonce); assert.ok(snapshot.seq >= peer.snapshot.seq);
+    }
+    assert.equal(h.removals.length, 1); assert.equal(h.directories.length, 5);
+    assert.deepEqual(commands(h, "split").at(-1).args.slice(2, 5), ["p1", "--direction", "down"]);
+    assert.equal(commands(h, "close").length, 0);
+  } finally { await h.finish(); }
+});
+
+test("missing reuse suppresses the previously viewed attempt, not the new candidate", async () => {
+  const h = realComposition(), old = task("old"), fresh = task("new");
+  try {
+    h.manager.reconcile([old], h.parent); await flush(); await h.time.advance(1000);
+    h.panes.delete("p0"); await h.viewers[0].stop(); old.status = "completed";
+    h.manager.reconcile([old, fresh], h.parent); await h.time.advance(1000);
+    assert.equal(commands(h, "run").length, 2);
+    assert.equal(snapshotsOnDisk(h)[0].snapshot.task.id, "new");
+    old.status = "running"; h.manager.reconcile([old, fresh], h.parent); await h.time.advance(1000);
+    assert.equal(commands(h, "run").length, 2);
+  } finally { await h.finish(); }
+});
+
+test("missing root replacement splits a proven healthy peer without disposing its transport", async () => {
+  const h = realComposition(), tasks = [task("a"), task("b"), task("c"), task("d")];
+  try {
+    h.manager.reconcile(tasks, h.parent); await flush(); await h.time.advance(1000);
+    h.panes.delete("p0"); await h.viewers[0].stop(); await h.time.advance(2000);
+    tasks[0] = task("a", { processGeneration: 2 });
+    h.manager.reconcile(tasks, h.parent); await h.time.advance(1000);
+    assert.equal(commands(h, "run").length, 5);
+    assert.equal(commands(h, "create").length, 1);
+    assert.equal(commands(h, "split").at(-1).args[2], "p1");
+    assert.deepEqual(h.removals, ["/private/transport-1"]);
+    assert.equal(snapshotsOnDisk(h).length, 4);
+  } finally { await h.finish(); }
+});
+
+test("unknown inspection leaves its occupied capacity and transport unavailable, not retired", async () => {
+  const h = realComposition(), tasks = [task("a"), task("b"), task("c"), task("d")];
+  try {
+    h.manager.reconcile(tasks, h.parent); await flush(); await h.time.advance(1000);
+    h.occupants.set("p3", []); await h.time.advance(2000);
+    tasks[3] = task("d", { processGeneration: 2 });
+    for (let i = 0; i < 4; i++) { h.manager.reconcile(tasks, h.parent); await h.time.advance(500); }
+    assert.equal(commands(h, "run").length, 4); assert.equal(h.stores.length, 4);
+    assert.deepEqual(h.removals, []); assert.equal(snapshotsOnDisk(h).length, 4);
+    await h.manager.stop();
+    assert.equal(commands(h, "close").some(c => c.args[2] === "p3"), false);
+  } finally { await h.finish(); }
+});
+
+test("real composition relinquishes foreign reused pane without suppressing the candidate with three empty positions", async () => {
+  const h = realComposition(), old = task("old"), fresh = task("new");
+  try {
+    h.manager.reconcile([old], h.parent); await flush(); await h.time.advance(1000);
+    h.occupants.set("p0", [{ pid: 900, name: "editor" }]); old.status = "completed";
+    h.manager.reconcile([old, fresh], h.parent); await h.time.advance(1000);
+    h.manager.reconcile([old, fresh], h.parent); await h.time.advance(1000);
+    assert.equal(commands(h, "run").length, 2);
+    assert.ok(snapshotsOnDisk(h).some(p => p.snapshot.task.id === "new"));
+    assert.equal(h.panes.has("p0"), true);
+    assert.equal(commands(h, "split").some(c => c.args[2] === "p0"), false);
+    await h.manager.stop();
+    assert.equal(commands(h, "release-agent").some(c => c.args[2] === "p0"), false);
+    assert.equal(commands(h, "close").some(c => c.args[2] === "p0" || c.args[2] === "owned"), false);
+  } finally { await h.finish(); }
+});
+
+for (const stopHeld of [false, true]) test(`real retirement is bounded while disposal is held${stopHeld ? " and stop prevents replacement" : ""}`, async () => {
+  const retirement = deferred(), h = realComposition({ heldDirectory: "/private/transport-4", retirement });
+  const tasks = [task("a"), task("b"), task("c"), task("d")];
+  try {
+    h.manager.reconcile(tasks, h.parent); await flush(); await h.time.advance(1000);
+    h.panes.delete("p3"); await h.time.advance(2000);
+    assert.deepEqual(h.removals, ["/private/transport-4"]);
+    // Stop the manually closed helper too, so old transport write history measures manager work.
+    await h.viewers[3].stop();
+    const oldWrites = h.transportWrites.filter(p => p.startsWith("/private/transport-4/")).length;
+    for (let generation = 2; generation <= 12; generation++) {
+      tasks[3] = task("d", { processGeneration: generation });
+      h.manager.reconcile(tasks, h.parent); await h.time.advance(250);
+    }
+    assert.equal(h.stores.length, 4); assert.equal(h.directories.length, 4);
+    assert.equal(h.transportWrites.filter(p => p.startsWith("/private/transport-4/")).length, oldWrites);
+    assert.deepEqual(h.removals, ["/private/transport-4"]);
+    assert.equal(snapshotsOnDisk(h).filter(p => p.snapshot.slotId < 3).length, 3);
+    let stopping;
+    if (stopHeld) { stopping = h.manager.stop(); await flush(); }
+    retirement.resolve(); await flush(); await h.time.advance(1000);
+    if (stopHeld) { await stopping; assert.equal(commands(h, "run").length, 4); assert.equal(h.stores.length, 4); assert.equal(h.files.size, 0); }
+    else { assert.equal(commands(h, "run").length, 5); assert.equal(h.stores.length, 5); assert.equal(snapshotsOnDisk(h).find(p => p.snapshot.slotId === 3).snapshot.task.generation, 12); }
+  } finally { retirement.resolve(); await h.finish(); }
 });
 
 test("late split after stop is inspected and rolled back without launching it", async () => {
