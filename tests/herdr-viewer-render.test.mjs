@@ -53,16 +53,16 @@ test("renders the latest tail rows with a pane-truncation marker when the trace 
   assert.deepEqual(lines, [
     "job · worker · completed",
     "… earlier content truncated …",
-    "text: mid-4",
-    "text: LATEST-TAIL",
+    "mid-4",
+    "LATEST-TAIL",
   ]);
   assert.deepEqual(renderViewer(snapshot, { columns: 80, rows: 10, now: 1 }), [
     "job · worker · completed",
-    "text: EARLY-HEAD",
-    "text: mid-2",
-    "text: mid-3",
-    "text: mid-4",
-    "text: LATEST-TAIL",
+    "EARLY-HEAD",
+    "mid-2",
+    "mid-3",
+    "mid-4",
+    "LATEST-TAIL",
   ]);
 });
 
@@ -79,7 +79,7 @@ test("handles empty rows, heading-only traces, and snapshot-level truncation mar
   const truncatedLines = renderViewer({ ...snapshot, truncated: true }, { columns: 80, rows: 7, now: 1 });
   assert.deepEqual(truncatedLines.at(-1), "… earlier content truncated …");
   assert.equal(truncatedLines.filter(line => line === "… earlier content truncated …").length, 1);
-  assert.ok(truncatedLines.includes("text: LATEST-TAIL"));
+  assert.ok(truncatedLines.includes("LATEST-TAIL"));
 });
 
 test("colors viewer chrome only when color:true and strips back to plain lines", () => {
@@ -98,9 +98,10 @@ test("colors viewer chrome only when color:true and strips back to plain lines",
   assert.deepEqual(colored.map(stripSgr), plain);
   // Heading carries bold plus a status color; error and truncation markers are styled.
   assert.ok(colored[0].includes("\x1b[1m"));
-  assert.ok(colored.find(line => stripSgr(line).startsWith("error: ")).includes("\x1b[31m"));
-  assert.ok(colored.find(line => stripSgr(line).startsWith("thinking: ")).includes("\x1b[2m"));
-  assert.ok(colored.find(line => stripSgr(line).startsWith("tool: ")).includes("\x1b[36m"));
+  assert.ok(colored.find(line => stripSgr(line) === "boom").includes("\x1b[31m"));
+  assert.ok(colored.find(line => stripSgr(line) === "hmm").includes("\x1b[2m"));
+  assert.ok(colored.find(line => stripSgr(line).startsWith("read ")).includes("\x1b[36m"));
+  assert.ok(colored.every(line => !/^(text|thinking|tool|output|error): /.test(stripSgr(line))));
   assert.ok(colored.filter(line => stripSgr(line).includes("truncated")).every(line => line.includes("\x1b[2m")));
 });
 

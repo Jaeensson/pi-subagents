@@ -71,8 +71,9 @@ const STATUS_STYLE = {
 };
 // Mirrors the inline trace tokens: tool calls stand out, errors are red,
 // thinking recedes; plain output and text stay unstyled for readability.
-const LABEL_STYLE = { tool: [SGR.cyan], error: [SGR.red], thinking: [SGR.dim] };
-const stain = (line, codes) => codes ? `${codes.join("")}${line}${SGR.reset}` : line;
+// No kind prefixes: with color carrying the kind, `tool:`/`text:` labels are noise.
+const KIND_STYLE = { toolCall: [SGR.cyan], error: [SGR.red], thinking: [SGR.dim] };
+const stain = (line, codes) => codes && line ? `${codes.join("")}${line}${SGR.reset}` : line;
 
 export function renderViewer(snapshot, options) {
   const columns = Math.max(1, Math.min(80, Math.floor(options.columns) || 1));
@@ -87,10 +88,10 @@ export function renderViewer(snapshot, options) {
   const markerStyle = paint ? [SGR.dim] : undefined;
   const body = [];
   for (const segment of snapshot.segments) {
-    const label = segment.kind === "toolCall" ? "tool" : segment.kind === "toolOutput" ? (segment.isError ? "error" : "output") : segment.kind;
-    const lineStyle = paint ? LABEL_STYLE[label] : undefined;
+    const key = segment.kind === "toolOutput" && segment.isError ? "error" : segment.kind;
+    const lineStyle = paint ? KIND_STYLE[key] : undefined;
     const text = sanitizeText(segment.text).replace(/\t/g, "    ");
-    for (const rawLine of text.split("\n")) for (const line of wrap(`${label}: ${rawLine}`, columns)) body.push(stain(line, lineStyle));
+    for (const rawLine of text.split("\n")) for (const line of wrap(rawLine, columns)) body.push(stain(line, lineStyle));
   }
   if (snapshot.truncated) for (const line of wrap("… earlier content truncated …", columns)) body.push(stain(line, markerStyle));
   if (headingLines.length >= rows) return headingLines.slice(0, rows);
