@@ -76,7 +76,9 @@ const KIND_STYLE = { toolCall: [SGR.cyan], error: [SGR.red], thinking: [SGR.dim]
 const stain = (line, codes) => codes && line ? `${codes.join("")}${line}${SGR.reset}` : line;
 
 export function renderViewer(snapshot, options) {
-  const columns = Math.max(1, Math.min(80, Math.floor(options.columns) || 1));
+  // Fill the pane: the viewer owns a dedicated pane, so wrap at its real width
+  // rather than a fixed editorial measure.
+  const columns = Math.max(1, Math.floor(options.columns) || 1);
   const rows = Math.max(0, Math.floor(options.rows) || 0);
   if (!rows) return [];
   const paint = options.color === true;

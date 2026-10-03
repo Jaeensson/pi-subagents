@@ -27,6 +27,13 @@ test("renders within narrow terminal dimensions with grapheme-safe clipping", ()
   }
 });
 
+test("uses the full pane width instead of capping the render at 80 columns", () => {
+  const snapshot = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 1, task: { id: "t", generation: 1, name: "job", agent: "worker", status: "running", startedAt: 0 }, segments: [{ kind: "text", text: "x".repeat(200) }], truncated: false };
+  const lines = renderViewer(snapshot, { columns: 120, rows: 10, now: 1 });
+  assert.deepEqual(lines.slice(2), ["x".repeat(120), "x".repeat(80)]);
+  assert.ok(lines.every(line => physicalWidth(line) <= 120));
+});
+
 test("fits independent physical-cell oracle across narrow widths and grapheme fixtures", () => {
   const fixtures = ["界", "🙂", "e\u0301", "🇸🇪", "🇳🇴", "1️⃣", "2️⃣", "👍🏽", "👨‍👩‍👧‍👦"];
   const snapshot = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 1, task: { id: "t", generation: 1, name: "", agent: "", status: "running", startedAt: 0 }, segments: [{ kind: "text", text: fixtures.join("") }], truncated: false };
