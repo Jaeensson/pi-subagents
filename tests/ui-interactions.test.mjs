@@ -6,6 +6,7 @@ import test from "node:test";
 
 const home = mkdtempSync(path.join(os.tmpdir(), "subagent-ui-"));
 process.env.HOME = home;
+for (const key of ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_BIN_PATH"]) delete process.env[key];
 mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
 writeFileSync(path.join(home, ".pi", "agent", "settings.json"), JSON.stringify({
   defaultModel: "sonnet",
@@ -23,13 +24,13 @@ const { setUi, updateStatusWidget, disposeWidget } = await import("../tui.ts");
 const { toggleWatch, disposeWatch } = await import("../watch.ts");
 const { visibleWidth } = await import("@earendil-works/pi-tui");
 
-function commandHarness(mode = "tui") {
+function commandHarness(mode = "tui", onHerdrOptionsChange) {
   let handler;
   const notices = [];
   let component;
   let done;
   const pi = { registerCommand: (_name, command) => { handler = command.handler; } };
-  registerSubagentsCommand(pi);
+  registerSubagentsCommand(pi, onHerdrOptionsChange);
   const ctx = {
     mode,
     hasUI: true,
@@ -72,10 +73,68 @@ test("picker arrows do not retarget ctrl-alt-l after cancel", async () => {
   assert.equal(h.notices.some((n) => n.message.includes("Highlight a tier row")), false);
 });
 
+test("Herdr preferences persist and notify only after a successful save", async () => {
+  const changes = [];
+  const h = commandHarness("tui", (next) => changes.push(next));
+  const running = h.invoke();
+  const component = h.component();
+  for (let i = 0; i < 4; i++) component.handleInput("\x1b[B"); // Herdr monitoring row
+  assert.match(component.render(100).join("\n"), /Herdr monitoring/);
+  component.handleInput(" ");
+  component.handleInput("\x1b");
+  await running;
+  const saved = JSON.parse(readFileSync(path.join(home, ".pi", "agent", "settings.json"), "utf8"));
+  assert.deepEqual(changes, [{ enabled: false, viewers: true }]);
+  assert.equal(saved.subagent.herdr.enabled, false);
+  assert.equal(saved.subagent.herdr.viewers, true);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].enabled, false);
+});
+
+test("Herdr rows survive auto-tier toggles and clearing on a Herdr row preserves tier mappings", async () => {
+  const settingsPath = path.join(home, ".pi", "agent", "settings.json");
+  const previous = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(previous);
+  settings.subagent.modelTiers = { auto: true, fast: "anthropic/haiku" };
+  writeFileSync(settingsPath, JSON.stringify(settings));
+  const h = commandHarness();
+  const running = h.invoke();
+  const component = h.component();
+  assert.match(component.render(100).join("\n"), /Herdr monitoring/);
+  component.handleInput("\r"); // toggle auto off; tier rows appear
+  assert.match(component.render(100).join("\n"), /Herdr monitoring/);
+  for (let i = 0; i < 4; i++) component.handleInput("\x1b[B"); // Herdr monitoring after tiers
+  component.handleInput("\x1b[108;7u"); // must not clear a model tier
+  component.handleInput("\x1b");
+  await running;
+  const after = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.equal(after.subagent.modelTiers.fast, "anthropic/haiku");
+  writeFileSync(settingsPath, previous);
+});
+
+test("failed Herdr preference writes do not invoke the active-options callback", async () => {
+  const settingsPath = path.join(home, ".pi", "agent", "settings.json");
+  const previous = readFileSync(settingsPath, "utf8");
+  writeFileSync(settingsPath, "not json");
+  const changes = [];
+  const h = commandHarness("tui", (next) => changes.push(next));
+  const running = h.invoke();
+  const component = h.component();
+  for (let i = 0; i < 4; i++) component.handleInput("\x1b[B");
+  component.handleInput(" ");
+  await running;
+  assert.equal(changes.length, 0);
+  assert.match(h.notices[0].message, /Could not save settings/);
+  writeFileSync(settingsPath, previous);
+});
+
 test("/subagents reports that RPC/print modes cannot host its terminal dialog", async () => {
   const h = commandHarness("rpc");
-  await h.invoke();
-  assert.match(h.notices[0].message, /requires TUI mode/i);
+  let warning = "";
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => { warning += String(chunk); return true; };
+  try { await h.invoke(); } finally { process.stderr.write = originalWrite; }
+  assert.match(warning, /requires TUI mode/i);
   assert.equal(h.component(), undefined);
 });
 

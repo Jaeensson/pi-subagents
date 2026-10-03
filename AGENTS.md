@@ -32,8 +32,15 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   - `jobs.ts` — job orchestration: chain runner, concurrency limiter,
     result builders, model-tier context
   - `tui.ts` — TUI rendering helpers + persistent status widget
-  - `command-subagents.ts` — `/subagents` settings dialog: auto-tier toggle +
-    per-tier model pickers, persisted via `writeModelTiers` in jobs.ts
+  - `command-subagents.ts` — `/subagents` settings dialog: auto-tier toggle,
+    per-tier model pickers, and Herdr monitoring/viewer switches; model tiers
+    persist via `writeModelTiers` and Herdr options via `herdr-settings.ts`
+  - `herdr-settings.ts` — pure normalization and persistence of Herdr options
+  - `herdr-monitor.ts` — session-bound metadata reporting and viewer lifecycle
+  - `herdr-viewers.ts` — owned viewer-pane pool and snapshot lifecycle
+  - `index.ts` composes the optional Herdr monitor at `session_start`; it binds
+    only tasks whose owning job matches the current parent session and disposes
+    the monitor at shutdown without blocking durable interruption or child reaping
   - `watch-render.ts` — markdown-aware trace→lines rendering for the watch
     pane: sealed + pending text/thinking through pi's native Markdown +
     getMarkdownTheme, memoized via live.ts's LineCache. Leaf module;
@@ -41,6 +48,9 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   - `watch.ts` — keybind-toggled watch pane: overlay component, keys, ticker,
     renderer latching (depends on runtime + watch-render + live + core + tui;
     never on process/jobs)
+  - `herdr-core.ts`, `herdr-adapter.ts`, `herdr-files.ts`,
+    `herdr-viewer-render.d.mts`, and `herdr-viewer.mjs` own Herdr protocols,
+    CLI adaptation, private snapshot files, and the standalone viewer
   - `tools/*.ts` — one file per registered tool (`defineTool`)
 - Keep the dependency graph acyclic: core → store → runtime → process → jobs
   → tools; live is a leaf (runtime imports it type-only, jobs imports

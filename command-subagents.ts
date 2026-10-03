@@ -50,6 +50,9 @@ import {
 	type TierLevel,
 } from "./core.ts";
 import { buildModelContext, writeModelTiers } from "./jobs.ts";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import * as path from "node:path";
+import { readHerdrOptions, writeHerdrOptions, type HerdrOptions } from "./herdr-settings.ts";
 
 // ── Applying changes ─────────────────────────────────────────────────────────
 
@@ -187,13 +190,17 @@ class ModelPickerComponent extends Container {
 // ── Main menu ────────────────────────────────────────────────────────────────
 
 const AUTO_ID = "auto";
+const HERDR_ENABLED_ID = "herdr-enabled";
+const HERDR_VIEWERS_ID = "herdr-viewers";
 const MENU_VISIBLE_ROWS = 10;
 
-async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
+async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (next: HerdrOptions) => void): Promise<void> {
 	const ui = ctx.ui;
 	const modelContext = buildModelContext(ctx);
 	let config = modelContext.tierConfig;
 	const options = catalogOptions(ctx);
+	const settingsPath = path.join(getAgentDir(), "settings.json");
+	let herdrOptions = readHerdrOptions(settingsPath);
 
 	const explicitTiers = () => TIER_LEVELS.filter((l) => config?.[l]).map((l) => `${l}: ${config?.[l]}`);
 
@@ -206,7 +213,8 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 		// kept in sync by intercepting main-menu up/down with the same wrap semantics.
 		let selectedIndex = 0;
 		let submenuOpen = false;
-		const itemCount = () => (config?.auto === true ? 1 : 1 + TIER_LEVELS.length);
+		const menuIds = () => [AUTO_ID, ...(config?.auto === true ? [] : TIER_LEVELS), HERDR_ENABLED_ID, HERDR_VIEWERS_ID];
+		const itemCount = () => menuIds().length;
 
 		// A rebuilt SettingsList starts with its cursor on row 0. Re-apply the
 		// mirrored highlight by feeding the fresh list down-arrows (public API
@@ -270,8 +278,28 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 									submenuDone(value);
 								}),
 						}))),
+				{
+					id: HERDR_ENABLED_ID, label: "Herdr monitoring", currentValue: herdrOptions.enabled ? "on" : "off",
+					values: ["on", "off"],
+					description: "Publish session-local subagent summaries to the active Herdr pane",
+				},
+				{
+					id: HERDR_VIEWERS_ID, label: "Herdr viewers", currentValue: herdrOptions.viewers ? "on" : "off",
+					values: ["on", "off"],
+					description: herdrOptions.enabled ? "Open managed viewer panes for running subagents" : "Effective only while Herdr monitoring is enabled",
+				},
 			];
 			return new SettingsList(items, MENU_VISIBLE_ROWS, getSettingsListTheme(), (id, value) => {
+				if (id === HERDR_ENABLED_ID || id === HERDR_VIEWERS_ID) {
+					const next = { ...herdrOptions, [id === HERDR_ENABLED_ID ? "enabled" : "viewers"]: value === "on" };
+					const result = writeHerdrOptions(settingsPath, next);
+					if (!result.ok) { ui.notify(`Could not save settings: ${result.error}`, "error"); done(true); return; }
+					herdrOptions = next;
+					try { onHerdrOptionsChange?.({ ...next }); } catch { /* integration is optional */ }
+					rebuildMenu();
+					tui.requestRender();
+					return;
+				}
 				const change: TierConfigChange = id === AUTO_ID
 					? { kind: "auto", value: value === "on" }
 					: { kind: "tier", level: id as TierLevel, model: value === AUTO_ID ? undefined : value };
@@ -303,7 +331,8 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 			invalidate: () => container.invalidate(),
 			handleInput: (data: string) => {
 				if (!submenuOpen && matchesKey(data, CLEAR_TIER)) {
-					const level = selectedIndex > 0 && config?.auto !== true ? TIER_LEVELS[selectedIndex - 1] : undefined;
+					const selectedId = menuIds()[selectedIndex];
+					const level = TIER_LEVELS.find((candidate) => candidate === selectedId);
 					if (!level) {
 						ui.notify("Highlight a tier row (fast/balanced/deep) to clear it.", "info");
 					} else {
@@ -333,7 +362,7 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 					selectedIndex = selectedIndex === 0 ? itemCount() - 1 : selectedIndex - 1;
 				} else if (kb.matches(data, "tui.select.down")) {
 					selectedIndex = selectedIndex === itemCount() - 1 ? 0 : selectedIndex + 1;
-				} else if (kb.matches(data, "tui.select.confirm") && selectedIndex > 0 && config?.auto !== true) {
+				} else if (kb.matches(data, "tui.select.confirm") && TIER_LEVELS.includes(menuIds()[selectedIndex] as TierLevel)) {
 					submenuOpen = true;
 				}
 				listHost.children[0]?.handleInput?.(data);
@@ -346,15 +375,15 @@ async function runDialog(ctx: ExtensionCommandContext): Promise<void> {
 // ── Registration ─────────────────────────────────────────────────────────────
 
 /** Register the `/subagents` settings command. */
-export function registerSubagentsCommand(pi: ExtensionAPI): void {
+export function registerSubagentsCommand(pi: ExtensionAPI, onHerdrOptionsChange?: (next: HerdrOptions) => void): void {
 	pi.registerCommand("subagents", {
-		description: "Subagent model tier settings (auto toggle + per-tier models)",
+		description: "Subagent model tier and Herdr monitoring settings",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") {
-				ctx.ui.notify("/subagents requires TUI mode; its settings dialog is terminal-only.", "warning");
+				try { process.stderr.write("/subagents requires TUI mode; its settings dialog is terminal-only.\n"); } catch { /* diagnostics only */ }
 				return;
 			}
-			await runDialog(ctx);
+			await runDialog(ctx, onHerdrOptionsChange);
 		},
 	});
 }
