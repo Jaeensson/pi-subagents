@@ -98,7 +98,7 @@ test("viewer launch round-trips literal executable and argv; decodes cmd and Pow
     }
     assert.equal(buildViewerCommand(node, script, snapshot, identityPath, identity, "unsupported"), undefined);
     for (const shell of ["posix", "cmd", "powershell"]) {
-      for (const control of ["\0", "\n", "\r", "\t", "\x1b", "\x7f"]) {
+      for (const control of ["\0", "\n", "\r", "\t", "\x1b", "\x7f", "\x80", "\x85", "\x9b", "\x9f"]) {
         for (let index = 0; index < 4; index++) {
           const paths = [node, script, snapshot, identityPath]; paths[index] += control;
           assert.equal(buildViewerCommand(...paths, identity, shell), undefined);

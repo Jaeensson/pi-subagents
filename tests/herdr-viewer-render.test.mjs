@@ -41,6 +41,47 @@ test("fits independent physical-cell oracle across narrow widths and grapheme fi
   assert.ok(fixtures.every(grapheme => wideLines.join("\n").includes(grapheme)));
 });
 
+test("renders the latest tail rows with a pane-truncation marker when the trace exceeds the pane", () => {
+  const snapshot = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 1, task: { id: "t", generation: 1, name: "job", agent: "worker", status: "completed", startedAt: 0 }, segments: [
+    { kind: "text", text: "EARLY-HEAD" },
+    { kind: "text", text: "mid-2" },
+    { kind: "text", text: "mid-3" },
+    { kind: "text", text: "mid-4" },
+    { kind: "text", text: "LATEST-TAIL" },
+  ], truncated: false };
+  const lines = renderViewer(snapshot, { columns: 80, rows: 4, now: 1 });
+  assert.deepEqual(lines, [
+    "job · worker · completed",
+    "… earlier content truncated …",
+    "text: mid-4",
+    "text: LATEST-TAIL",
+  ]);
+  assert.deepEqual(renderViewer(snapshot, { columns: 80, rows: 10, now: 1 }), [
+    "job · worker · completed",
+    "text: EARLY-HEAD",
+    "text: mid-2",
+    "text: mid-3",
+    "text: mid-4",
+    "text: LATEST-TAIL",
+  ]);
+});
+
+test("handles empty rows, heading-only traces, and snapshot-level truncation markers", () => {
+  const snapshot = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 1, task: { id: "t", generation: 1, name: "job", agent: "worker", status: "completed", startedAt: 0 }, segments: [
+    { kind: "text", text: "EARLY-HEAD" },
+    { kind: "text", text: "mid-2" },
+    { kind: "text", text: "mid-3" },
+    { kind: "text", text: "mid-4" },
+    { kind: "text", text: "LATEST-TAIL" },
+  ], truncated: false };
+  assert.deepEqual(renderViewer(snapshot, { columns: 80, rows: 0, now: 1 }), []);
+  assert.deepEqual(renderViewer({ ...snapshot, segments: [] }, { columns: 80, rows: 4, now: 1 }), ["job · worker · completed"]);
+  const truncatedLines = renderViewer({ ...snapshot, truncated: true }, { columns: 80, rows: 7, now: 1 });
+  assert.deepEqual(truncatedLines.at(-1), "… earlier content truncated …");
+  assert.equal(truncatedLines.filter(line => line === "… earlier content truncated …").length, 1);
+  assert.ok(truncatedLines.includes("text: LATEST-TAIL"));
+});
+
 // Independent fixture oracle: widths are explicit for every non-ASCII grapheme
 // emitted by these tests (not inferred from the renderer's Unicode categories).
 function physicalWidth(text) {

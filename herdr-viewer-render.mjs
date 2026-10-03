@@ -65,12 +65,19 @@ export function renderViewer(snapshot, options) {
   const age = Math.max(0, options.now - snapshot.heartbeatAt);
   const state = options.disconnected || age > 10000 ? "disconnected" : snapshot.task.status;
   const heading = `${snapshot.task.name} · ${snapshot.task.agent} · ${state}`;
-  const lines = wrap(sanitizeText(heading), columns);
+  const headingLines = wrap(sanitizeText(heading), columns);
+  const body = [];
   for (const segment of snapshot.segments) {
     const label = segment.kind === "toolCall" ? "tool" : segment.kind === "toolOutput" ? (segment.isError ? "error" : "output") : segment.kind;
     const text = sanitizeText(segment.text).replace(/\t/g, "    ");
-    for (const rawLine of text.split("\n")) lines.push(...wrap(`${label}: ${rawLine}`, columns));
+    for (const rawLine of text.split("\n")) body.push(...wrap(`${label}: ${rawLine}`, columns));
   }
-  if (snapshot.truncated) lines.push(...wrap("… earlier content truncated …", columns));
-  return lines.slice(0, rows);
+  if (snapshot.truncated) body.push(...wrap("… earlier content truncated …", columns));
+  if (headingLines.length >= rows) return headingLines.slice(0, rows);
+  const available = rows - headingLines.length;
+  if (body.length <= available) return [...headingLines, ...body];
+  // Keep the heading, mark the lines the pane dropped, and retain the latest tail.
+  const marker = wrap("… earlier content truncated …", columns);
+  if (marker.length >= available) return [...headingLines, ...marker.slice(0, available)];
+  return [...headingLines, ...marker, ...body.slice(-(available - marker.length))];
 }

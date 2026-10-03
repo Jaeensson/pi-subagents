@@ -166,7 +166,7 @@ const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 const psQuote = (s: string): string => `'${s.replace(/'/g, "''")}'`;
 export function buildViewerCommand(nodePath: string, scriptPath: string, snapshotPath: string, identityPath: string, identity: SlotIdentity, shell: "posix" | "powershell" | "cmd" | "unsupported"): string | undefined {
   const values = [nodePath, scriptPath, snapshotPath, identityPath, identity.activationId, identity.nonce];
-  if (values.some(v => /[\x00-\x1f\x7f]/.test(v)) || !Number.isSafeInteger(identity.slotId) || identity.slotId < 0) return;
+  if (values.some(v => /[\x00-\x1f\x7f-\x9f]/.test(v)) || !Number.isSafeInteger(identity.slotId) || identity.slotId < 0) return;
   const args = [nodePath, scriptPath, "--snapshot", snapshotPath, "--identity", identityPath, "--activation", identity.activationId, "--slot", String(identity.slotId), "--nonce", identity.nonce];
   if (shell === "posix") return args.map(shellQuote).join(" ");
   if (shell !== "powershell" && shell !== "cmd") return;
