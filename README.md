@@ -183,6 +183,46 @@ tier mapping applies, the child inherits the parent's default model. The
 extension's `/subagents` settings dialog can toggle automatic tiers and choose
 per-tier models.
 
+## Optional Herdr monitoring
+
+When pi runs inside a Herdr pane, subagents can report display-only activity
+metadata and open a **Subagents** tab with up to four read-only viewer panes.
+Herdr 0.8.2 is the compatibility baseline. Outside Herdr, this integration is
+inactive: no Herdr commands, viewer processes, monitoring files, or timers.
+
+Both settings default to `true` in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "subagent": {
+    "herdr": {
+      "enabled": true,
+      "viewers": true
+    }
+  }
+}
+```
+
+Use `/subagents` to change **Herdr monitoring** or **Herdr viewers**
+immediately. Manual settings-file edits require `/reload`. Setting `viewers`
+to `false` closes owned viewers but keeps central activity metadata enabled;
+setting `enabled` to `false` also clears the integration's metadata. Neither
+switch stops running children.
+
+Viewer panes show sanitized text, thinking, and tool activity. Completed output
+stays visible until that pane is reused; executing tasks are never evicted.
+Panes open without stealing focus and are **not** execution backends or
+interactive child pi sessions. Display labels and activity counts do not change
+the parent's semantic agent state, native session identity, or resume behavior.
+A viewer shows disconnected after ten seconds without a producer heartbeat and
+exits after thirty seconds. Live snapshots are bounded previews, not full
+transcripts or output artifacts.
+
+Missing Herdr/Node, unsupported shells, or monitoring failures fall back to the
+normal pi status/watch UI and tool results. Spawning, model selection,
+completion delivery, durable jobs, and pause/resume remain authoritative and
+unchanged; the optional monitor must not block child work.
+
 ## How it works
 
 Children run `pi --mode json -p` with `--no-extensions --no-skills
@@ -205,3 +245,25 @@ npm run typecheck
 `npm test` uses Node's built-in test runner. `npm run typecheck` runs `tsc
 --noEmit`. For local development, symlink the repository into
 `~/.pi/agent/extensions/subagent`, then reload pi (`/reload`).
+
+### Opt-in Herdr smoke verification (source checkout only)
+
+```bash
+node scripts/herdr-monitor-smoke.mjs
+```
+
+This developer script is not packed with the extension. It explicitly creates
+one uniquely named disposable **headless** Herdr session with private temporary
+configuration, agent files, and snapshot resources, then stops and deletes that
+session. It never attaches to your default/inherited session or loads your shell
+dotfiles/Herdr plugins. Fake JSON children exercise the real extension hooks and
+parsing without provider calls or recursive agents. Checks include four real
+viewers, retained output and reuse, no focus stealing, parent native identity,
+settings switches, plain-terminal inactivity, and producer-heartbeat loss.
+Successful output includes the generated session name and checks; failures exit
+nonzero. Requires an installed Herdr CLI and `/bin/sh`; allow about a minute.
+`npm test` uses injected external ports and never creates a live Herdr session.
+
+Treat live verification as platform-specific: the compatibility baseline is not
+a claim that every OS or shell has been tested. Windows/PowerShell/cmd and other
+shells need their own isolated live verification before claiming support there.
