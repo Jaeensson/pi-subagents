@@ -6,6 +6,7 @@ import test from "node:test";
 
 const home = mkdtempSync(path.join(os.tmpdir(), "subagent-ui-"));
 process.env.HOME = home;
+process.env.PI_CODING_AGENT_DIR = path.join(home, ".pi", "agent");
 for (const key of ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_BIN_PATH"]) delete process.env[key];
 mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
 writeFileSync(path.join(home, ".pi", "agent", "settings.json"), JSON.stringify({
@@ -57,6 +58,10 @@ const theme = {
   dim: (text) => text,
 };
 
+test.beforeEach(() => writeFileSync(path.join(home, ".pi", "agent", "settings.json"), JSON.stringify({
+  defaultModel: "sonnet", subagent: { modelTiers: { fast: "anthropic/haiku" } },
+})));
+
 test("picker arrows do not retarget ctrl-alt-l after cancel", async () => {
   const h = commandHarness();
   const running = h.invoke();
@@ -75,7 +80,11 @@ test("picker arrows do not retarget ctrl-alt-l after cancel", async () => {
 
 test("Herdr preferences persist and notify only after a successful save", async () => {
   const changes = [];
-  const h = commandHarness("tui", (next) => changes.push(next));
+  const h = commandHarness("tui", (next) => {
+    const saved = JSON.parse(readFileSync(path.join(home, ".pi", "agent", "settings.json"), "utf8"));
+    assert.deepEqual(saved.subagent.herdr, next, "callback runs only after persistence");
+    changes.push(next);
+  });
   const running = h.invoke();
   const component = h.component();
   for (let i = 0; i < 4; i++) component.handleInput("\x1b[B"); // Herdr monitoring row
@@ -122,10 +131,50 @@ test("failed Herdr preference writes do not invoke the active-options callback",
   const component = h.component();
   for (let i = 0; i < 4; i++) component.handleInput("\x1b[B");
   component.handleInput(" ");
+  h.done(true); // baseline lacks the Herdr row; never hang while asserting its missing behavior
   await running;
   assert.equal(changes.length, 0);
   assert.match(h.notices[0].message, /Could not save settings/);
   writeFileSync(settingsPath, previous);
+});
+
+// Break caught: tying viewers to monitoring or treating Herdr rows as tier-picker submenus.
+test("viewer preference saves independently and remains visible when monitoring is disabled", async () => {
+  const settingsPath = path.join(home, ".pi", "agent", "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({ subagent: { modelTiers: { auto: true, fast: "anthropic/haiku" }, herdr: { enabled: false, viewers: true } } }));
+  const changes = [];
+  const h = commandHarness("tui", next => changes.push(next));
+  const running = h.invoke(), component = h.component();
+  assert.match(component.render(100).join("\n"), /Herdr viewers/);
+  component.handleInput("\x1b[B"); component.handleInput("\x1b[B"); // viewers with tiers hidden
+  assert.match(component.render(100).join("\n"), /disabled|inactive/i);
+  component.handleInput("\r"); // must toggle, never enter a tier submenu
+  component.handleInput("\x1b[108;7u"); // Herdr highlight cannot clear fast
+  component.handleInput("\x1b"); await running;
+  assert.deepEqual(changes, [{ enabled: false, viewers: false }]);
+  const saved = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.deepEqual(saved.subagent.herdr, { enabled: false, viewers: false });
+  assert.equal(saved.subagent.modelTiers.fast, "anthropic/haiku");
+});
+
+// Break caught: mutating dialog preferences despite a failed save.
+test("failed viewer save preserves the displayed active preference and stored independent switches", async () => {
+  const settingsPath = path.join(home, ".pi", "agent", "settings.json");
+  const original = JSON.stringify({ subagent: { herdr: { enabled: true, viewers: true } } });
+  writeFileSync(settingsPath, original);
+  const changes = [], h = commandHarness("tui", next => changes.push(next));
+  const running = h.invoke(), component = h.component();
+  for (let i = 0; i < 5; i++) component.handleInput("\x1b[B");
+  const before = component.render(100).join("\n");
+  assert.match(before, /Herdr viewers/);
+  // A corrupt concurrent write is rejected, not overwritten.
+  writeFileSync(settingsPath, "not json");
+  component.handleInput(" ");
+  assert.equal(component.render(100).join("\n"), before, "active preferences stay unchanged on failed persistence");
+  assert.deepEqual(changes, []);
+  assert.equal(readFileSync(settingsPath, "utf8"), "not json");
+  h.done(true); await running;
+  writeFileSync(settingsPath, original);
 });
 
 test("/subagents reports that RPC/print modes cannot host its terminal dialog", async () => {

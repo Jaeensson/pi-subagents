@@ -38,9 +38,12 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   - `herdr-settings.ts` — pure normalization and persistence of Herdr options
   - `herdr-monitor.ts` — session-bound metadata reporting and viewer lifecycle
   - `herdr-viewers.ts` — owned viewer-pane pool and snapshot lifecycle
-  - `index.ts` composes the optional Herdr monitor at `session_start`; it binds
-    only tasks whose owning job matches the current parent session and disposes
-    the monitor at shutdown without blocking durable interruption or child reaping
+  - `index.ts` constructs one idle, extension-scoped Herdr controller; each
+    `session_start` updates its mutable session binding and starts it after durable
+    recovery, before the non-TUI return. Suppliers filter by owning job session.
+    Failed starts promptly stop the retained controller. Shutdown closes the spawn
+    gate, immediately handles monitor-stop rejection, then durably interrupts and
+    reaps children before a promise-only two-second final cleanup guard.
   - `watch-render.ts` — markdown-aware trace→lines rendering for the watch
     pane: sealed + pending text/thinking through pi's native Markdown +
     getMarkdownTheme, memoized via live.ts's LineCache. Leaf module;

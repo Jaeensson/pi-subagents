@@ -30,8 +30,12 @@
  *   tools/*.ts  — one file per registered tool
  */
 
+import path from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as path from "node:path";
+import { createHerdrAdapter } from "./herdr-adapter.ts";
+import { createHerdrMonitor, nodeMonitorClock, type HerdrMonitor } from "./herdr-monitor.ts";
+import { readHerdrOptions } from "./herdr-settings.ts";
+import { createViewerManager } from "./herdr-viewers.ts";
 import { beginTaskShutdown, markInterruptedSweep, resumeTaskSpawning, shutdownTaskProcesses } from "./process.ts";
 import { seedBundledAgents } from "./agents.ts";
 import {
@@ -41,19 +45,15 @@ import {
 	setStatusChangedHook,
 	setJobsRoot,
 	setParentSessionId,
+	subscribeRuntimeObservations,
 	tasks,
 	jobs,
-	subscribeRuntimeObservations,
 } from "./runtime.ts";
 import { COMPLETION_MESSAGE_TYPE, disposeWidget, registerCompletionRenderer, registerInterruptedRenderer, INTERRUPTED_MESSAGE_TYPE, setUi, updateStatusWidget } from "./tui.ts";
 import { deleteExpiredJob, isResumableJob, listJobManifests, pruneEmptyBuckets, reconcileManifest } from "./store.ts";
 import { formatJobListings, getDefaultJobsRoot, listJobsForCurrentSession, readJobRetentionDays } from "./jobs.ts";
 import { disposeWatch, handleWatchInput, maybeAutoCloseWatch } from "./watch.ts";
 import { registerSubagentsCommand } from "./command-subagents.ts";
-import { createHerdrAdapter } from "./herdr-adapter.ts";
-import { createHerdrMonitor, nodeMonitorClock, type HerdrMonitor } from "./herdr-monitor.ts";
-import { createViewerManager } from "./herdr-viewers.ts";
-import { readHerdrOptions, type HerdrOptions } from "./herdr-settings.ts";
 import { subagentAgentsTool } from "./tools/subagent-agents.ts";
 import { subagentPauseTool } from "./tools/subagent-pause.ts";
 import { subagentResumeTool } from "./tools/subagent-resume.ts";
@@ -63,20 +63,38 @@ import { subagentTool } from "./tools/subagent.ts";
 
 // Set when the extension loads; used by async completion notifications.
 let api: ExtensionAPI;
-let activeHerdrMonitor: HerdrMonitor | undefined;
 
-function warnHerdr(message: string): void {
-	const safe = message.replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g, "")
-		.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x1F\x7F-\x9F]/g, "").slice(0, 160);
-	try { process.stderr.write(`Herdr monitoring: ${safe}\n`); } catch { /* diagnostics only */ }
-}
-
-function applyHerdrOptions(next: HerdrOptions): void {
-	try { activeHerdrMonitor?.applyOptions(next); } catch { /* monitoring is optional */ }
-}
-
-export default function (pi: ExtensionAPI, options: { createMonitor?: typeof createHerdrMonitor } = {}) {
+export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof createHerdrMonitor } = {}) {
 	api = pi;
+	let boundSessionId: string | undefined;
+	let monitor: HerdrMonitor | undefined;
+	// Never relay external CLI diagnostics to JSON stdout or terminal controls.
+	const warn = (message: string) => {
+		const safe = message.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
+			.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x1f\x7f-\x9f]/g, "").slice(0, 80);
+		try { process.stderr.write(`${safe}\n`); } catch { /* display only */ }
+	};
+	// One idle controller owns sequencing and the shared raw adapter across starts.
+	// Construction must not activate commands, subscriptions, files, or timers.
+	try {
+		monitor = (ports.createMonitor ?? createHerdrMonitor)({
+			env: process.env,
+			getTasks: () => boundSessionId === undefined ? [] : [...tasks.values()].filter(
+				(task) => jobs.get(task.jobId)?.parentSessionId === boundSessionId,
+			),
+			subscribe: subscribeRuntimeObservations,
+			adapterFactory: createHerdrAdapter,
+			clock: nodeMonitorClock,
+			viewerFactory: createViewerManager,
+			warn,
+		});
+	} catch { warn("Herdr monitoring unavailable: controller creation failed"); }
+	const stopMonitor = (): Promise<void> | undefined => {
+		try {
+			// Attach rejection handling NOW, not after durable writes or child reaping.
+			return monitor?.stop()?.catch(() => { warn("Herdr monitoring cleanup failed"); });
+		} catch { warn("Herdr monitoring cleanup failed"); }
+	};
 	// Completion notifications go out as custom messages (rendered as a
 	// "finished" card, not a "Steering: ..." user message) but keep the
 	// same delivery timing and still trigger a turn, matching the old
@@ -104,6 +122,7 @@ export default function (pi: ExtensionAPI, options: { createMonitor?: typeof cre
 		// surface resumable jobs from a previous run of THIS session.
 		const psid = ctx.sessionManager?.getSessionId?.();
 		setParentSessionId(psid);
+		boundSessionId = psid;
 		const root = getDefaultJobsRoot();
 		setJobsRoot(root);
 		try {
@@ -142,33 +161,14 @@ export default function (pi: ExtensionAPI, options: { createMonitor?: typeof cre
 		} catch {
 			/* store problems never block startup */
 		}
-		const previousMonitor = activeHerdrMonitor;
-		activeHerdrMonitor = undefined;
 		try {
-			const previousCleanup = previousMonitor?.stop();
-			if (previousCleanup && typeof (previousCleanup as Promise<void>).then === "function") {
-				void Promise.resolve(previousCleanup).catch(() => {});
-			}
-		} catch { /* a prior monitor cannot prevent session rebinding */ }
-		try {
-			const settingsPath = path.join(getAgentDir(), "settings.json");
-			const herdrOptions = readHerdrOptions(settingsPath);
-			const createMonitor = options.createMonitor ?? createHerdrMonitor;
-			const monitor = createMonitor({
-				env: process.env,
-				getTasks: () => {
-					const sessionId = psid;
-					return sessionId ? [...tasks.values()].filter(task => jobs.get(task.jobId)?.parentSessionId === sessionId) : [];
-				},
-				subscribe: subscribeRuntimeObservations,
-				adapterFactory: createHerdrAdapter,
-				clock: nodeMonitorClock,
-				warn: warnHerdr,
-				viewerFactory: createViewerManager,
-			});
-			monitor.start(psid ?? "", ctx.cwd ?? process.cwd(), herdrOptions);
-			activeHerdrMonitor = monitor;
-		} catch { /* monitoring is optional and must not affect session startup */ }
+			if (psid) monitor?.start(psid, ctx.cwd, readHerdrOptions(path.join(getAgentDir(), "settings.json")));
+			else void stopMonitor();
+		} catch (error) {
+			// Retain the controller even if start allocated resources before throwing.
+			void stopMonitor();
+			warn(`Herdr monitoring unavailable: ${error instanceof Error ? error.message : "start failed"}`);
+		}
 		if (!ctx.hasUI) return;
 		setUi(ctx.ui);
 		ctx.ui.onTerminalInput((data) => handleWatchInput(data));
@@ -177,14 +177,7 @@ export default function (pi: ExtensionAPI, options: { createMonitor?: typeof cre
 	pi.on("session_shutdown", async () => {
 		// Prevent delayed spawn setup from launching a child after this sweep starts.
 		beginTaskShutdown();
-		let herdrCleanup: Promise<void> | undefined;
-		try {
-			const result = activeHerdrMonitor?.stop();
-			if (result && typeof (result as Promise<void>).then === "function") {
-				herdrCleanup = Promise.resolve(result).catch(() => {});
-			}
-		} catch { /* monitor cleanup cannot prevent child reaping */ }
-		activeHerdrMonitor = undefined;
+		const monitorCleanup = stopMonitor();
 		// Drop UI references first so task-close callbacks during teardown no-op.
 		setUi(undefined);
 		disposeWidget();
@@ -200,10 +193,13 @@ export default function (pi: ExtensionAPI, options: { createMonitor?: typeof cre
 		// durable sweep may already have changed running tasks to interrupted.
 		await shutdownTaskProcesses();
 		clearRegistry();
-		if (herdrCleanup) {
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			await Promise.race([herdrCleanup, new Promise<void>(resolve => { timer = setTimeout(resolve, 2000); })]);
-			if (timer) clearTimeout(timer);
+		// Only a returned promise earns a final guard; outside Herdr stop is undefined.
+		if (monitorCleanup) {
+			await new Promise<void>((resolve) => {
+				const finish = () => { clearTimeout(timer); resolve(); };
+				const timer = setTimeout(finish, 2000);
+				void monitorCleanup.then(finish);
+			});
 		}
 	});
 
@@ -213,5 +209,8 @@ export default function (pi: ExtensionAPI, options: { createMonitor?: typeof cre
 	pi.registerTool(subagentAgentsTool);
 	pi.registerTool(subagentPauseTool);
 	pi.registerTool(subagentResumeTool);
-	registerSubagentsCommand(pi, applyHerdrOptions);
+	registerSubagentsCommand(pi, (next) => {
+		try { monitor?.applyOptions(next); }
+		catch { warn("Herdr monitoring unavailable: option change failed"); }
+	});
 }
