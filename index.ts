@@ -67,6 +67,7 @@ let api: ExtensionAPI;
 export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof createHerdrMonitor } = {}) {
 	api = pi;
 	let boundSessionId: string | undefined;
+	let monitorStartupGeneration = 0;
 	let monitor: HerdrMonitor | undefined;
 	// Never relay external CLI diagnostics to JSON stdout or terminal controls.
 	const warn = (message: string) => {
@@ -117,12 +118,13 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 	seedBundledAgents();
 
 	pi.on("session_start", async (event, ctx) => {
+		// This stamp gates only optional monitoring, never native recovery or UI.
+		const startupGeneration = ++monitorStartupGeneration;
 		resumeTaskSpawning();
 		// Session-scoped persistence: bind the store bucket, GC old jobs, and
 		// surface resumable jobs from a previous run of THIS session.
 		const psid = ctx.sessionManager?.getSessionId?.();
 		setParentSessionId(psid);
-		boundSessionId = psid;
 		const root = getDefaultJobsRoot();
 		setJobsRoot(root);
 		try {
@@ -161,13 +163,19 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 		} catch {
 			/* store problems never block startup */
 		}
-		try {
-			if (psid) monitor?.start(psid, ctx.cwd, readHerdrOptions(path.join(getAgentDir(), "settings.json")));
-			else void stopMonitor();
-		} catch (error) {
-			// Retain the controller even if start allocated resources before throwing.
-			void stopMonitor();
-			warn(`Herdr monitoring unavailable: ${error instanceof Error ? error.message : "start failed"}`);
+		if (startupGeneration === monitorStartupGeneration) {
+			try {
+				const options = readHerdrOptions(path.join(getAgentDir(), "settings.json"));
+				// Commit the supplier with the synchronous activation, after recovery.
+				// Pending work from the old activation keeps its old session until now.
+				boundSessionId = psid || undefined;
+				if (psid) monitor?.start(psid, ctx.cwd, options);
+				else void stopMonitor();
+			} catch (error) {
+				// Retain the controller even if start allocated resources before throwing.
+				void stopMonitor();
+				warn(`Herdr monitoring unavailable: ${error instanceof Error ? error.message : "start failed"}`);
+			}
 		}
 		if (!ctx.hasUI) return;
 		setUi(ctx.ui);
@@ -177,6 +185,8 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 	pi.on("session_shutdown", async () => {
 		// Prevent delayed spawn setup from launching a child after this sweep starts.
 		beginTaskShutdown();
+		++monitorStartupGeneration;
+		boundSessionId = undefined;
 		const monitorCleanup = stopMonitor();
 		// Drop UI references first so task-close callbacks during teardown no-op.
 		setUi(undefined);
@@ -210,6 +220,7 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 	pi.registerTool(subagentPauseTool);
 	pi.registerTool(subagentResumeTool);
 	registerSubagentsCommand(pi, (next) => {
+		if (boundSessionId === undefined) return;
 		try { monitor?.applyOptions(next); }
 		catch { warn("Herdr monitoring unavailable: option change failed"); }
 	});

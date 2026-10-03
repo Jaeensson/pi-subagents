@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +28,39 @@ const { readManifest, writeManifest } = await import("../store.ts");
 const theme = { fg: (_color, text) => text, bold: text => text, dim: text => text };
 const flush = async () => { for (let i = 0; i < 120; i++) await Promise.resolve(); };
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+// Hold one actual async GC/recovery operation beneath the entry hook, only in
+// this test's private jobs root. A second startup may finish while this one waits.
+function holdRecovery() {
+  const root = getJobsRoot(), bucket = path.join(root, "held-empty-bucket");
+  assert.ok(root.startsWith(agentDir + path.sep));
+  mkdirSync(bucket, { recursive: true });
+  const entered = deferred(), released = deferred(), original = fs.promises.rmdir;
+  let holding = true;
+  fs.promises.rmdir = async (target, ...args) => {
+    if (holding && target === bucket) {
+      holding = false;
+      entered.resolve();
+      await released.promise;
+    }
+    return original(target, ...args);
+  };
+  return { entered: entered.promise, release: released.resolve,
+    restore() { released.resolve(); fs.promises.rmdir = original; } };
+}
+async function completeTask(fixture, code = 0) {
+  fixture.close(code);
+  assert.equal(await waitForJob(fixture.job.id), true);
+}
+async function toggleMonitoring(h) {
+  let component;
+  const dialog = h.command().handler("", {
+    mode: "tui", hasUI: true, model: undefined, scopedModels: [], modelRegistry: { getAvailable: () => [] },
+    ui: { notify() {}, custom: factory => new Promise(resolve => { component = factory({ requestRender() {} }, theme, {}, resolve); }) },
+  });
+  for (let i = 0; i < 4; i++) component.handleInput("\x1b[B");
+  component.handleInput(" "); component.handleInput("\x1b");
+  await dialog; await flush();
+}
 async function until(predicate) {
   for (let i = 0; i < 500; i++) {
     if (predicate()) return;
@@ -96,7 +130,7 @@ const wire = (id, tab = "parent-tab") => ({ pane_id: id, tab_id: tab, workspace_
 const argument = (args, flag) => args[args.indexOf(flag) + 1];
 function composition({ holdFirstReport = false, viewers = false } = {}) {
   const time = clock(), calls = [], held = deferred(), identities = new Map(), snapshots = [], applied = [];
-  let deps, factories = 0, adapters = 0, viewerCreated = false, viewerRunning = false, disposed = 0;
+  let deps, factories = 0, adapters = 0, viewerCreated = false, viewerRunning = false, disposed = 0, nextLookup;
   const h = harness(received => {
     factories++; deps = received;
     const monitor = createHerdrMonitor({ ...received, env, clock: time,
@@ -105,7 +139,10 @@ function composition({ holdFirstReport = false, viewers = false } = {}) {
         return createHerdrAdapter(context, async (_binary, args, options) => {
           calls.push(args);
           if (holdFirstReport && args.includes("--token") && calls.filter(c => c.includes("--token")).length === 1) await held.promise;
-          if (args[1] === "current") return envelope({ pane: options.env.HERDR_PANE_ID === "parent" ? wire("parent") : wire("viewer", "viewer-tab") });
+          if (args[1] === "current") {
+            if (nextLookup) { const gate = nextLookup; nextLookup = undefined; gate.entered.resolve(); await gate.held.promise; }
+            return envelope({ pane: options.env.HERDR_PANE_ID === "parent" ? wire("parent") : wire("viewer", "viewer-tab") });
+          }
           if (args[0] === "tab" && args[1] === "create") { viewerCreated = true; return envelope({ tab: { tab_id: "viewer-tab" }, root_pane: wire("viewer", "viewer-tab") }); }
           if (args[1] === "process-info") return envelope({ process_info: { pane_id: argument(args, "--pane"), shell_pid: 7,
             foreground_processes: [{ pid: viewerRunning ? 100 : 7, name: viewerRunning ? "node" : "bash" }] } });
@@ -128,7 +165,9 @@ function composition({ holdFirstReport = false, viewers = false } = {}) {
     });
     return { ...monitor, applyOptions(next) { applied.push({ ...next }); monitor.applyOptions(next); } };
   });
-  return { ...h, calls, time, held, snapshots, applied, get deps() { return deps; }, get factories() { return factories; },
+  return { ...h, calls, time, held, snapshots, applied,
+    holdLookup() { const entered = deferred(), held = deferred(); nextLookup = { entered, held }; return { entered: entered.promise, release: held.resolve }; },
+    get deps() { return deps; }, get factories() { return factories; },
     get adapters() { return adapters; }, get disposed() { return disposed; } };
 }
 
@@ -173,6 +212,97 @@ test("same-session restart serializes held old report, cleanup, and newer report
     assert.deepEqual(patches.map(c => argument(c, "--seq")), ["1000001", "1000002", "1000003"]);
     assert.equal(h.adapters, 1);
   } finally { h.held.resolve(); await h.shutdown(); }
+});
+
+// Break caught: rebinding the supplier before recovery publishes B counts under A's source.
+test("held session recovery keeps pending A lookup and refresh on A counts until B activation commits", async () => {
+  save({ subagent: { herdr: { enabled: true, viewers: false } } });
+  const h = composition(); let recovery, lookup, starting;
+  try {
+    await h.start();
+    await childFixture("recovery-a");
+    const b = await childFixture("recovery-b", "session-b");
+    await completeTask(b, 1);
+    await h.time.advance(0);
+    lookup = h.holdLookup();
+    await h.time.advance(5000); await lookup.entered;
+    recovery = holdRecovery();
+    starting = h.start("session-b"); await recovery.entered;
+    const before = h.calls.length;
+    lookup.release(); await flush();
+    await h.time.advance(5000);
+    const reports = h.calls.slice(before).filter(c => c.includes("--token"));
+    assert.equal(reports.length, 2, "pending A lookup and subsequent A refresh both publish");
+    assert.deepEqual(reports.map(c => [argument(c, "--source"), argument(c, "--token")]), [
+      ["pi-subagent:session-a", "subagent_summary=running 1 · queued 0 · paused 0 · completed 0 · unsuccessful 0"],
+      ["pi-subagent:session-a", "subagent_summary=running 1 · queued 0 · paused 0 · completed 0 · unsuccessful 0"],
+    ]);
+    recovery.release(); await starting; await flush();
+    const latest = h.calls.filter(c => c.includes("--token")).at(-1);
+    assert.equal(argument(latest, "--source"), "pi-subagent:session-b");
+    assert.equal(argument(latest, "--token"), "subagent_summary=running 0 · queued 0 · paused 0 · completed 0 · unsuccessful 1");
+    assert.equal(h.factories, 1); assert.equal(h.adapters, 1);
+  } finally { lookup?.release(); recovery?.restore(); await starting; await h.shutdown(); }
+});
+
+// Break caught: an older held startup reactivates monitoring after a newer startup commits.
+test("superseded held startup cannot replace the newer optional monitor binding", async () => {
+  save({ subagent: { herdr: { enabled: true, viewers: false } } });
+  const h = composition(); let recovery, starting;
+  try {
+    await h.start(); await childFixture("supersede-a");
+    const c = await childFixture("supersede-c", "session-c"); await completeTask(c, 1);
+    await h.time.advance(0);
+    recovery = holdRecovery(); starting = h.start("session-b"); await recovery.entered;
+    await h.start("session-c"); await flush();
+    const before = h.calls.length, timers = h.time.timers.size;
+    recovery.release(); await starting; await flush();
+    assert.equal(h.calls.length, before, "stale startup creates no commands or cleanup");
+    assert.equal(h.time.timers.size, timers, "stale startup creates no monitoring timers");
+    await h.time.advance(5000);
+    const latest = h.calls.filter(c => c.includes("--token")).at(-1);
+    assert.equal(argument(latest, "--source"), "pi-subagent:session-c");
+    assert.equal(argument(latest, "--token"), "subagent_summary=running 0 · queued 0 · paused 0 · completed 0 · unsuccessful 1");
+    assert.equal(h.adapters, 1); assert.equal(h.factories, 1);
+  } finally { recovery?.restore(); await starting; await h.shutdown(); }
+});
+
+// Break caught: a held startup can start new resources after shutdown has stopped the controller.
+test("shutdown invalidates held startup without skipping its native UI wiring", async () => {
+  save({ subagent: { herdr: { enabled: true, viewers: false } } });
+  const h = composition(); let recovery, starting, input;
+  try {
+    await h.start(); const a = await childFixture("held-shutdown-a"); await h.time.advance(0);
+    recovery = holdRecovery();
+    starting = h.start("session-b", { hasUI: true, ui: { onTerminalInput(fn) { input = fn; }, setWidget() {} } });
+    await recovery.entered; await h.shutdown(); await flush();
+    assert.equal(a.child.signalCode, "SIGTERM"); assert.equal(a.task.status, "interrupted");
+    assert.equal(h.time.timers.size, 0);
+    const before = h.calls.length;
+    recovery.release(); await starting; await flush();
+    assert.equal(typeof input, "function", "generation guard does not suppress native UI startup");
+    assert.equal(h.calls.length, before, "late startup creates no new CLI resources");
+    assert.equal(h.time.timers.size, 0, "late startup creates no new timers");
+  } finally { recovery?.restore(); await starting; await h.shutdown(); }
+});
+
+// Break caught: real monitor.stop retains toggle binding, so a late saved preference can reactivate it.
+test("late saved option changes during held recovery cannot reactivate a shutdown controller", async () => {
+  save({ subagent: { herdr: { enabled: true, viewers: false } } });
+  const h = composition(); let recovery, starting;
+  try {
+    await h.start(); await childFixture("late-options-a"); await h.time.advance(0);
+    recovery = holdRecovery(); starting = h.start("session-b"); await recovery.entered;
+    await h.shutdown(); await flush();
+    const before = h.calls.length;
+    await toggleMonitoring(h); await toggleMonitoring(h);
+    assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")).subagent.herdr, { enabled: true, viewers: false });
+    assert.equal(h.calls.length, before, "saved preferences must not allocate commands while unbound");
+    assert.equal(h.time.timers.size, 0, "saved preferences must not allocate timers while unbound");
+    assert.equal(h.applied.length, 0, "entry does not pass late changes to retained monitor binding");
+    recovery.release(); await starting; await flush();
+    assert.equal(h.calls.length, before); assert.equal(h.time.timers.size, 0);
+  } finally { recovery?.restore(); await starting; await h.shutdown(); }
 });
 
 // Break caught: entry factory/default path creates resources outside the environment gate.
