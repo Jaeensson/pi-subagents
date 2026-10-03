@@ -32,9 +32,22 @@ test("summaries include setup work and slot choice protects executing slots", ()
   assert.deepEqual(chooseSlot([
     { index: 0, phase: "reserved", availableSince: 0 },
     { index: 1, phase: "ready", taskStatus: "completed", availableSince: 1 },
-    { index: 2, phase: "ready", taskStatus: "paused", availableSince: 9 },
+    { index: 2, phase: "ready", taskStatus: "paused", availableSince: 0 },
     { index: 3, phase: "ready", taskStatus: "paused", availableSince: 10 },
   ]), { kind: "reuse", index: 2 });
+});
+
+test("oldest ready slot precedes empty panes and status never overrides age", () => {
+  assert.deepEqual(chooseSlot([
+    { index: 0, phase: "empty", availableSince: 0 },
+    { index: 1, phase: "ready", taskStatus: "completed", availableSince: 1 },
+    { index: 2, phase: "ready", taskStatus: "paused", availableSince: 9 },
+    { index: 3, phase: "unavailable", availableSince: 0 },
+  ]), { kind: "reuse", index: 1 });
+  assert.deepEqual(chooseSlot([
+    { index: 0, phase: "ready", taskStatus: "completed", availableSince: 1 },
+    { index: 1, phase: "ready", taskStatus: "paused", availableSince: 9 },
+  ]), { kind: "reuse", index: 0 });
 });
 
 test("snapshots project bounded display-only content without mutating live state", () => {

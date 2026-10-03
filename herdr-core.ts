@@ -128,9 +128,9 @@ export function encodeSnapshot(snapshot: ViewerSnapshot): string {
 }
 
 export function chooseSlot(slots: readonly SlotState[]): { kind: "reuse" | "create"; index: number } | { kind: "full" } {
-  const empty = slots.filter(slot => slot.phase === "empty").sort((a, b) => a.index - b.index)[0];
-  if (empty) return { kind: "create", index: empty.index };
   const reusable = slots.filter(slot => slot.phase === "ready" && slot.taskStatus !== "running")
-    .sort((a, b) => (a.taskStatus === "paused" ? 0 : 1) - (b.taskStatus === "paused" ? 0 : 1) || a.availableSince - b.availableSince || a.index - b.index)[0];
-  return reusable ? { kind: "reuse", index: reusable.index } : { kind: "full" };
+    .sort((a, b) => a.availableSince - b.availableSince || a.index - b.index)[0];
+  if (reusable) return { kind: "reuse", index: reusable.index };
+  const empty = slots.filter(slot => slot.phase === "empty").sort((a, b) => a.index - b.index)[0];
+  return empty ? { kind: "create", index: empty.index } : { kind: "full" };
 }
