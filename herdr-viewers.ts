@@ -34,12 +34,14 @@ export async function resolveViewerNode(execPath: string, env: NodeJS.ProcessEnv
   }
 }
 
-type Shell = "posix" | "powershell" | "cmd";
+type Shell = "posix" | "fish" | "powershell" | "cmd";
 function shellOf(info: ProcessInfo): Shell | undefined {
   // Only the sole, explicitly identified shell PID authorizes an unlaunched rollback.
   if (!info.shellPid || info.foregroundProcesses.length !== 1 || info.foregroundProcesses[0].pid !== info.shellPid) return;
   const name = info.foregroundProcesses[0].name.split(/[\\/]/).at(-1)?.toLowerCase();
   if (name && /^(?:sh|bash|dash|zsh|ksh|ash)$/.test(name)) return "posix";
+  // Fish parses the same single-quote grammar the posix viewer command uses.
+  if (name === "fish") return "fish";
   if (name === "powershell" || name === "powershell.exe" || name === "pwsh" || name === "pwsh.exe") return "powershell";
   if (name === "cmd" || name === "cmd.exe") return "cmd";
 }

@@ -80,6 +80,15 @@ test("viewer launch round-trips literal executable and argv; decodes cmd and Pow
     const result = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), expected);
+    // Fish parses the same single-quote grammar: 'a'\''b' concatenates to a'b.
+    const fishCommand = buildViewerCommand(node, script, snapshot, identityPath, identity, "fish");
+    assert.equal(fishCommand, command);
+    const fishProbe = spawnSync("fish", ["-c", "echo ok"], { encoding: "utf8" });
+    if (fishProbe.status === 0) {
+      const fished = spawnSync("fish", ["-c", fishCommand], { encoding: "utf8" });
+      assert.equal(fished.status, 0, fished.stderr);
+      assert.deepEqual(JSON.parse(fished.stdout), expected);
+    }
     const windows = ["C:\\node path\\node's %$().exe", "C:\\viewer path\\script's %$().mjs", "C:\\snap path\\it's %$()", "C:\\id path\\it's %$()"];
     for (const shell of ["cmd", "powershell"]) {
       const launch = buildViewerCommand(...windows, identity, shell);
@@ -97,7 +106,7 @@ test("viewer launch round-trips literal executable and argv; decodes cmd and Pow
       assert.deepEqual(literals, [windows[0], windows[1], "--snapshot", windows[2], "--identity", windows[3], "--activation", identity.activationId, "--slot", "3", "--nonce", identity.nonce]);
     }
     assert.equal(buildViewerCommand(node, script, snapshot, identityPath, identity, "unsupported"), undefined);
-    for (const shell of ["posix", "cmd", "powershell"]) {
+    for (const shell of ["posix", "fish", "cmd", "powershell"]) {
       for (const control of ["\0", "\n", "\r", "\t", "\x1b", "\x7f", "\x80", "\x85", "\x9b", "\x9f"]) {
         for (let index = 0; index < 4; index++) {
           const paths = [node, script, snapshot, identityPath]; paths[index] += control;

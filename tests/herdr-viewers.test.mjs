@@ -138,8 +138,15 @@ test("explicit missing suppresses manually closed attempt instead of recreating 
   assert.deepEqual(h.counts(), { tabs: 1, splits: 0 }); await h.manager.stop();
 });
 
-for (const shell of ["fish", "unknown"]) test(`does not guess ${shell} shell launch`, async () => {
-  const h = harness({ shell }); h.manager.reconcile([task("t")], h.parent); await flush(); assert.equal(commands(h, "run").length, 0); assert.equal(commands(h, "close").length, 0); await h.manager.stop();
+test("does not guess unknown shell launch", async () => {
+  const h = harness({ shell: "unknown" }); h.manager.reconcile([task("t")], h.parent); await flush(); assert.equal(commands(h, "run").length, 0); assert.equal(commands(h, "close").length, 0); await h.manager.stop();
+});
+
+test("fish shell launches viewer with the posix quoting grammar", async () => {
+  const h = harness({ shell: "fish" }); h.manager.reconcile([task("t")], h.parent); await flush();
+  assert.equal(commands(h, "run").length, 1);
+  assert.match(commands(h, "run")[0].args[3], /^'\/node /);
+  await h.manager.stop();
 });
 
 test("publication is throttled to four per second and retained output gets two-second heartbeats", async () => {

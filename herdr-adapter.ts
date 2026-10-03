@@ -164,11 +164,12 @@ function errorResult(error: any): ApiResult<never> {
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 const psQuote = (s: string): string => `'${s.replace(/'/g, "''")}'`;
-export function buildViewerCommand(nodePath: string, scriptPath: string, snapshotPath: string, identityPath: string, identity: SlotIdentity, shell: "posix" | "powershell" | "cmd" | "unsupported"): string | undefined {
+export function buildViewerCommand(nodePath: string, scriptPath: string, snapshotPath: string, identityPath: string, identity: SlotIdentity, shell: "posix" | "fish" | "powershell" | "cmd" | "unsupported"): string | undefined {
   const values = [nodePath, scriptPath, snapshotPath, identityPath, identity.activationId, identity.nonce];
   if (values.some(v => /[\x00-\x1f\x7f-\x9f]/.test(v)) || !Number.isSafeInteger(identity.slotId) || identity.slotId < 0) return;
   const args = [nodePath, scriptPath, "--snapshot", snapshotPath, "--identity", identityPath, "--activation", identity.activationId, "--slot", String(identity.slotId), "--nonce", identity.nonce];
-  if (shell === "posix") return args.map(shellQuote).join(" ");
+  // Fish concatenates adjacent quoted segments like a Bourne shell, so the posix grammar runs unmodified.
+  if (shell === "posix" || shell === "fish") return args.map(shellQuote).join(" ");
   if (shell !== "powershell" && shell !== "cmd") return;
   const ps = `& ${args.map(psQuote).join(" ")}; exit $LASTEXITCODE`;
   const encoded = Buffer.from(ps, "utf16le").toString("base64");
