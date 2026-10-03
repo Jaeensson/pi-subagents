@@ -28,6 +28,12 @@ export async function runSmokeDriver() {
   const config = process.env.HERDR_CONFIG_PATH;
   for (const key of Object.keys(process.env)) if (key.startsWith("HERDR_")) delete process.env[key];
   const gate = { HERDR_ENV: "1", HERDR_SOCKET_PATH: socket, HERDR_PANE_ID: parentId, HERDR_BIN_PATH: binary, HERDR_CONFIG_PATH: config };
+  // A realistic agent dir carries a readable settings.json; the product's
+  // persistence layer deliberately never creates one from scratch. Seed a
+  // minimal valid object (defaults apply) so settings toggles exercise real
+  // persistence in the private agent dir.
+  const settingsPath = path.join(root, "agent", "settings.json");
+  try { await fs.writeFile(settingsPath, "{}\n", { flag: "wx", mode: 0o600 }); } catch (error) { if (error.code !== "EEXIST") throw error; }
   // Agent-dir is set before any SDK or extension import (SDK caches its paths).
   const sdk = await import("@earendil-works/pi-coding-agent");
   assert.equal(sdk.getAgentDir(), path.join(root, "agent"));
@@ -128,14 +134,20 @@ export async function runSmokeDriver() {
       const task = await spawnTask({ name: "worker", source: "user", systemPrompt: "", tools: [], extensions: [] }, `Smoke task ${index}`, root, jobId,
         { taskId: `smoke-${index}`, name: `smoke-${index}`, modelCtx: { catalog: [] }, spawnProcess: () => proc });
       const emit = event => proc.stdout.emit("data", Buffer.from(JSON.stringify(event) + "\n"));
+      // Real providers stream the full final text as deltas; message_end only
+      // seals streams and reconciles tool calls, so every retained marker must
+      // be genuinely streamed text (trace-content contract). Task 1 is later
+      // completed first, so its streamed text carries the retention marker.
+      const streamedText = [`text-${index}`, ...(index === 1 ? [" retained-complete-1"] : [])];
       for (const kind of ["thinking", "text"]) {
+        const parts = kind === "thinking" ? [`thinking-${index}`] : streamedText;
         emit({ type: "message_update", assistantMessageEvent: { type: `${kind}_start`, contentIndex: kind === "thinking" ? 0 : 1 } });
-        emit({ type: "message_update", assistantMessageEvent: { type: `${kind}_delta`, delta: `${kind}-${index}`, contentIndex: kind === "thinking" ? 0 : 1 } });
+        for (const part of parts) emit({ type: "message_update", assistantMessageEvent: { type: `${kind}_delta`, delta: part, contentIndex: kind === "thinking" ? 0 : 1 } });
         emit({ type: "message_update", assistantMessageEvent: { type: `${kind}_end`, contentIndex: kind === "thinking" ? 0 : 1 } });
       }
       emit({ type: "tool_execution_start", toolCallId: `tool-${index}`, toolName: "read", args: { path: `fixture-${index}` } });
       emit({ type: "tool_execution_end", toolCallId: `tool-${index}`, toolName: "read", result: { content: [{ type: "text", text: `tool-output-${index}` }] }, isError: false });
-      const fixture = { task, proc, emit, close };
+      const fixture = { task, proc, emit, close, finalText: streamedText.join("") };
       fixtures.push(fixture); return fixture;
     };
     for (let i = 1; i <= 4; i++) await child(i);
@@ -170,7 +182,9 @@ export async function runSmokeDriver() {
     const before = await readTransport(reused);
     const peerTransports = transports.filter(t => t !== reused);
     const peers = await Promise.all(peerTransports.map(async t => ({ nonce: t.identity.nonce, pid: (await t.store.readIdentity(t.identity.slotId)).pid })));
-    first.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "retained-complete-1" }], stopReason: "stop" } });
+    // message_end content mirrors the concatenated streamed text, like a real
+    // provider; no content is invented that was never streamed.
+    first.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: first.finalText }], stopReason: "stop" } });
     first.close();
     await until(() => first.task.status === "completed" && !first.task.finalizing, "real JSON child finalization");
     const completedPane = await until(async () => { const values = await viewerPanes(); return values.find(p => p.agent_status !== "working"); }, "completed viewer retained");
