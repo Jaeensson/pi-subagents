@@ -109,6 +109,46 @@ test("viewer launch round-trips literal executable and argv; decodes cmd and Pow
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("known void actions accept empty stdout while reads and creation remain strict", async () => {
+  const actions = [
+    ["runViewer", "pane-run"],
+    ["metadata", "pane-metadata"],
+    ["viewerState", "pane-report-agent"],
+    ["releaseViewer", "pane-release-agent"],
+    ["notify", "notification-show"],
+    ["closePane", "pane-close"],
+    ["closeTab", "tab-close"],
+  ];
+  for (const [name] of actions) {
+    for (const stdout of ["", " \n\t"]) {
+      const api = createHerdrAdapter(context, async () => stdout);
+      const result = name === "runViewer" ? await api.runViewer("p", "node viewer")
+        : name === "metadata" ? await api.metadata("p", { source: "s", seq: "1" })
+        : name === "viewerState" ? await api.viewerState("p", "idle", "s", "1")
+        : name === "releaseViewer" ? await api.releaseViewer("p", "s", "1")
+        : name === "notify" ? await api.notify("title", "body")
+        : name === "closePane" ? await api.closePane("p") : await api.closeTab("t");
+      assert.deepEqual(result, { ok: true, value: undefined }, `${name}: ${JSON.stringify(stdout)}`);
+    }
+  }
+  assert.equal((await createHerdrAdapter(context, async () => "").pane("p")).reason, "invalid");
+  assert.equal((await createHerdrAdapter(context, async () => "").createTab("w", "/tmp")).reason, "invalid");
+});
+
+test("void actions reject malformed nonempty stdout and structured or execution errors", async () => {
+  for (const output of ["not json", "{\"id\":\"x\",\"result\":{}}", errorEnvelope("permission_denied", "denied")]) {
+    const result = await createHerdrAdapter(context, async () => output).closePane("p");
+    assert.equal(result.ok, false, output);
+  }
+  for (const error of [
+    Object.assign(new Error("exit 1"), { code: 1, stderr: errorEnvelope("permission_denied", "denied") }),
+    Object.assign(new Error("exit 2"), { code: 2, stderr: "execution detail" }),
+  ]) {
+    const result = await createHerdrAdapter(context, async () => { throw error; }).closePane("p");
+    assert.equal(result.reason, "unavailable");
+  }
+});
+
 test("timeout and stderr remain unavailable, malformed stdout is invalid", async () => {
   const timeout = Object.assign(new Error("timed out"), { code: "ETIMEDOUT", stderr: "timeout detail" });
   const r = runner([timeout, "not json", Object.assign(new Error("failed"), { stderr: "specific stderr" })]);

@@ -89,14 +89,15 @@ export function createHerdrAdapter(context: HerdrContext, exec: HerdrExec = (bin
   };
 
   const make = (isCurrent: () => boolean): HerdrAdapter => {
-    const invokeBatch = (commands: string[][], caller = context.callerPaneId, key?: string): Promise<any[]> => schedule(commands.map(args => async () => {
+    const invokeBatch = (commands: string[][], caller = context.callerPaneId, key?: string, voidActions = false): Promise<any[]> => schedule(commands.map(args => async () => {
       if (!isCurrent()) throw staleError();
       const output = await exec(context.binary, args, { env: { ...process.env, HERDR_SOCKET_PATH: context.socketPath, HERDR_PANE_ID: caller }, timeout: 2000, maxBuffer: 64 * 1024 });
+      if (voidActions && output.trim() === "") return undefined;
       return parseOutput(output);
     }), () => !isCurrent(), key);
     const invoke = async (args: string[], caller = context.callerPaneId, key?: string): Promise<any> => (await invokeBatch([args], caller, key))[0];
     const action = async (args: string[], key?: string): Promise<ApiResult<void>> => {
-      try { await invoke(args, context.callerPaneId, key); return success(undefined); } catch (e: any) { return errorResult(e); }
+      try { await invokeBatch([args], context.callerPaneId, key, true); return success(undefined); } catch (e: any) { return errorResult(e); }
     };
     const wrap = async <T>(fn: () => Promise<T>): Promise<ApiResult<T>> => { try { return success(await fn()); } catch (e: any) { return errorResult(e); } };
     return {
@@ -137,7 +138,7 @@ export function createHerdrAdapter(context: HerdrContext, exec: HerdrExec = (bin
           await invokeBatch([
             ["pane", "release-agent", id, "--source", source, "--seq", seq, "--agent", "pi-subagent-viewer"],
             ["pane", "report-metadata", id, "--source", source, "--seq", seq, "--clear-token", "subagent_summary", "--clear-state-labels"],
-          ], context.callerPaneId, id);
+          ], context.callerPaneId, id, true);
           return success(undefined);
         } catch (e: any) { return errorResult(e); }
       },
