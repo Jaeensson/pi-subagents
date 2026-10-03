@@ -26,6 +26,13 @@ test("current pane passes explicit caller identity, socket and bounded options",
   assert.equal(r.calls[0].options.timeout, 2000); assert.equal(r.calls[0].options.maxBuffer, 65536);
 });
 
+test("createTab passes the literal display label in exact external argv", async () => {
+  const r = runner([ok({ tab: { tab_id: "t" }, root_pane: { pane_id: "p", tab_id: "t", workspace_id: "w" } })]);
+  const api = createHerdrAdapter(context, r.exec);
+  assert.equal((await api.createTab("w", "/work")).ok, true);
+  assert.deepEqual(r.calls[0].args, ["tab", "create", "--workspace", "w", "--cwd", "/work", "--no-focus", "--label", "Subagents"]);
+});
+
 test("pane not found is missing, malformed creation is invalid, and tab creation avoids focus", async () => {
   const r = runner([errorEnvelope("pane_not_found"), ok({ tab: { tab_id: "t" } })]);
   const api = createHerdrAdapter(context, r.exec);
