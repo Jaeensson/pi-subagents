@@ -71,34 +71,20 @@ const ChainItem = Type.Object({
 const waitParam = Type.Optional(Type.Boolean({ description: "true (default): block until done and return results. false: spawn in background and return jobIds immediately.", default: true }));
 const notifyOnCompleteParam = Type.Optional(Type.Boolean({ description: "When wait: false, deliver a summary message when the batch finishes. Default: true.", default: true }));
 
-const SingleParams = Type.Object({
-	mode: Type.Literal("single"),
+const subagentParams = Type.Object({
+	mode: Type.Union([Type.Literal("single"), Type.Literal("parallel"), Type.Literal("chain")], {
+		description: "Execution mode: single {mode: 'single', agent?, task}, parallel {mode: 'parallel', tasks: [{agent?, task}]}, or chain {mode: 'chain', chain: [{agent?, task}]} (sequential, {previous} placeholder; agent optional in both).",
+	}),
 	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke. Omit for a raw prompt using the built-in default agent." })),
-	task: Type.String({ description: "Task to delegate, or the raw prompt when no agent is given" }),
+	task: Type.Optional(Type.String({ description: "Task to delegate, or the raw prompt when no agent is given" })),
+	tasks: Type.Optional(Type.Array(TaskItem, { minItems: 1, description: "Non-empty array of {agent?, task} for parallel execution (max 8); omit agent for a raw prompt using the built-in default agent" })),
+	chain: Type.Optional(Type.Array(ChainItem, { minItems: 1, description: "Non-empty array of {agent?, task} for sequential execution; use {previous} in a task to reference the prior output; omit agent for a raw prompt using the built-in default agent" })),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	tier: singleTierParam,
 	name: Type.Optional(Type.String({ description: 'Short human-readable name for this subagent session, e.g. "feature1-implementation". Shown in the status widget. Defaults to a slug of the task.' })),
 	wait: waitParam,
 	notifyOnComplete: notifyOnCompleteParam,
 }, { additionalProperties: false });
-
-const ParallelParams = Type.Object({
-	mode: Type.Literal("parallel"),
-	tasks: Type.Array(TaskItem, { minItems: 1, description: "Non-empty array of {agent?, task} for parallel execution (max 8); omit agent for a raw prompt using the built-in default agent" }),
-	wait: waitParam,
-	notifyOnComplete: notifyOnCompleteParam,
-}, { additionalProperties: false });
-
-const ChainParams = Type.Object({
-	mode: Type.Literal("chain"),
-	chain: Type.Array(ChainItem, { minItems: 1, description: "Non-empty array of {agent?, task} for sequential execution; use {previous} in a task to reference the prior output; omit agent for a raw prompt using the built-in default agent" }),
-	cwd: Type.Optional(Type.String({ description: "Working directory for chain agent processes" })),
-	wait: waitParam,
-	notifyOnComplete: notifyOnCompleteParam,
-}, { additionalProperties: false });
-
-const subagentParams = Type.Union([SingleParams, ParallelParams, ChainParams]);
-
 
 /** Themed per-status icon shared by the result renderers. */
 function themedStatusIcon(status: string, theme: any): string {
@@ -269,23 +255,25 @@ export const subagentTool = defineTool<typeof subagentParams, ToolDetails>({
 
 	renderCall(args, theme, _context) {
 		if (args.mode === "chain") {
-			let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", `chain (${args.chain.length} steps)`) + theme.fg("muted", args.wait === false ? " [async]" : "");
-			for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
-				const step = args.chain[i];
+			const steps = args.chain ?? [];
+			let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", `chain (${steps.length} steps)`) + theme.fg("muted", args.wait === false ? " [async]" : "");
+			for (let i = 0; i < Math.min(steps.length, 3); i++) {
+				const step = steps[i];
 				const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
 				const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
 				text += "\n  " + theme.fg("muted", `${i + 1}.`) + " " + theme.fg("accent", displayAgentName(step.agent)) + theme.fg("dim", ` ${preview}`);
 			}
-			if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
+			if (steps.length > 3) text += `\n  ${theme.fg("muted", `... +${steps.length - 3} more`)}`;
 			return new Text(text, 0, 0);
 		}
 		if (args.mode === "parallel") {
-			let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", `parallel (${args.tasks.length} tasks)`) + theme.fg("muted", args.wait === false ? " [async]" : "");
-			for (const t of args.tasks.slice(0, 3)) {
+			const items = args.tasks ?? [];
+			let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", `parallel (${items.length} tasks)`) + theme.fg("muted", args.wait === false ? " [async]" : "");
+			for (const t of items.slice(0, 3)) {
 				const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
 				text += `\n  ${theme.fg("accent", displayAgentName(t.agent))}${theme.fg("dim", ` ${preview}`)}`;
 			}
-			if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
+			if (items.length > 3) text += `\n  ${theme.fg("muted", `... +${items.length - 3} more`)}`;
 			return new Text(text, 0, 0);
 		}
 		const agentName = args.agent || "default";

@@ -41,7 +41,8 @@ test("subagent schema accepts one explicit mode and rejects ambiguous shapes", (
 	assert.equal(Check(subagentTool.parameters, { chain: [{ task: "legacy chain" }] }), false);
 	assert.equal(Check(subagentTool.parameters, { task: "missing mode" }), false);
 	assert.equal(Check(subagentTool.parameters, { mode: "other", task: "unknown mode" }), false);
-	assert.equal(Check(subagentTool.parameters, { mode: "single", task: "single", tasks: [{ task: "wrong mode" }] }), false);
+	// Cross-mode extras (e.g. single + tasks) now pass the flattened schema;
+	// mode-specific requirements are enforced by the execute() guards instead.
 	assert.equal(Check(subagentTool.parameters, { mode: "parallel", tasks: [] }), false);
 	assert.equal(Check(subagentTool.parameters, { mode: "chain", chain: [] }), false);
 });
