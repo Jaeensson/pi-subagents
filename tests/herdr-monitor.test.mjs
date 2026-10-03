@@ -164,7 +164,7 @@ test("completions during held startup query are captured once, while silent jobs
   assert.equal(h.listeners.size, 1);
   h.emit(finished("job")); h.emit(finished("job")); h.emit(finished("silent", false)); await flush();
   assert.equal(h.notifications.length, 1);
-  assert.deepEqual(h.notifications[0].args, ["notification", "show", "Subagent batch completed", "--body", "3 tasks · 1 unsuccessful"]);
+  assert.deepEqual(h.notifications[0].args, ["notification", "show", "Subagent batch completed · job", "--body", "3 tasks · 1 unsuccessful"]);
   query.resolve(pane("parent")); await flush(); await stop(h);
 });
 
@@ -302,13 +302,32 @@ test("completion overflow is dropped with no deferred replay after the shared qu
   await stop(h);
 });
 
-test("deduplication history overflow drops new completions instead of retaining unbounded IDs or replaying old jobs", async () => {
+test("deduplication covers every eligible completion for the activation without a lifetime cutoff", async () => {
   const h = harness(); h.monitor.start("session", "/cwd", metadataOnly); await flush();
-  // Drain each command so this exercises history capacity, not scheduler overflow.
+  // Drain each command so this exercises lifetime deduplication, not scheduler overflow.
   for (let i = 0; i < 300; i++) { h.emit(finished(`job-${i}`)); await flush(); }
-  assert.equal(h.notifications.length, 256); assert.equal(h.warnings.length, 1);
-  h.emit(finished("job-0")); h.emit(finished("extra")); await flush();
-  assert.equal(h.notifications.length, 256); assert.equal(h.warnings.length, 1); await stop(h);
+  assert.equal(h.notifications.length, 300);
+  assert.equal(arg(h.notifications[0], "--body"), "3 tasks · 1 unsuccessful");
+  assert.match(h.notifications[0].args[2], /job-0$/);
+  h.emit(finished("job-0")); h.emit(finished("job-299")); h.emit(finished("new-after-300")); await flush();
+  assert.equal(h.notifications.length, 301);
+  assert.match(h.notifications[300].args[2], /new-after-300$/);
+  await stop(h);
+});
+
+test("notification display IDs are bounded and stripped of terminal controls", async () => {
+  const h = harness(); h.monitor.start("session", "/cwd", metadataOnly); await flush();
+  h.emit(finished("bad\x1b]0;title\x07\x1b[31m-id\x1b[0m"));
+  h.emit(finished("x".repeat(200))); await flush();
+  assert.equal(h.notifications.length, 2);
+  for (const call of h.notifications) {
+    assert.ok(call.args[2].length <= 80);
+    assert.ok(call.args[4].length <= 80);
+    assert.doesNotMatch(`${call.args[2]}${call.args[4]}`, /[\x00-\x1f\x7f-\x9f]/);
+  }
+  assert.match(h.notifications[0].args[2], /bad-id$/);
+  assert.equal(h.notifications[1].args[2].length, 75);
+  await stop(h);
 });
 
 test("no viewer factory port is required and viewer-only toggles keep central reporting active", async () => {

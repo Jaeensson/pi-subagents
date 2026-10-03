@@ -58,10 +58,12 @@ function metadataSource(sessionId: string): string {
 }
 const sameContext = (a: HerdrContext, b: HerdrContext): boolean =>
   a.binary === b.binary && a.socketPath === b.socketPath && a.callerPaneId === b.callerPaneId;
-const displayWarning = (message: string): string => `Herdr monitoring unavailable: ${message}`
+const stripTerminalControls = (value: string): string => value
   .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g, "")
   .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
-  .replace(/[\x00-\x1F\x7F-\x9F]/g, "").slice(0, 80);
+  .replace(/[\x00-\x1F\x7F-\x9F]/g, "");
+const displayWarning = (message: string): string => stripTerminalControls(`Herdr monitoring unavailable: ${message}`).slice(0, 80);
+const displayJobId = (id: string): string => stripTerminalControls(id).trim().slice(0, 48) || "unknown";
 
 export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
   const { clock } = deps;
@@ -100,12 +102,11 @@ export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
     if (event.type !== "job-finished" || !event.completion.notifyOnComplete) return;
     const completion = event.completion;
     if (a.notified.has(completion.id)) return;
-    // Best effort: a fixed history budget, with overflow dropped, never a replay queue.
-    // Stop admitting new IDs when full rather than evicting IDs and notifying twice.
-    if (a.notified.size >= 256) { warn(a, "completion notification budget exhausted"); return; }
+    // Retain one scalar ID for this activation to suppress duplicate live events.
     a.notified.add(completion.id);
-    const title = completion.status === "completed" ? "Subagent batch completed" : "Subagent batch unsuccessful";
-    // Only bounded numeric counts, never task text, job IDs or transcripts.
+    const outcome = completion.status === "completed" ? "completed" : "unsuccessful";
+    const title = `Subagent batch ${outcome} · ${displayJobId(completion.id)}`.slice(0, 80);
+    // Batch counts only; never task text or transcripts.
     const body = `${completion.total} tasks · ${completion.unsuccessful} unsuccessful`.slice(0, 80);
     void a.api.notify(title, body).then(result => check(a, result), () => warn(a, "notification failed"));
   };
