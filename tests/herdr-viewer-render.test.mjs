@@ -82,6 +82,42 @@ test("handles empty rows, heading-only traces, and snapshot-level truncation mar
   assert.ok(truncatedLines.includes("text: LATEST-TAIL"));
 });
 
+test("colors viewer chrome only when color:true and strips back to plain lines", () => {
+  const snapshot = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 1, task: { id: "t", generation: 1, name: "job", agent: "worker", status: "running", startedAt: 0 }, segments: [
+    { kind: "thinking", text: "hmm" },
+    { kind: "toolCall", text: "read {\"path\":\"f\"}" },
+    { kind: "toolOutput", text: "ok" },
+    { kind: "toolOutput", text: "boom", isError: true },
+    { kind: "text", text: "done" },
+  ], truncated: true };
+  const plain = renderViewer(snapshot, { columns: 80, rows: 20, now: 1 });
+  assert.ok(plain.every(line => !/\x1b/.test(line)));
+  const colored = renderViewer(snapshot, { columns: 80, rows: 20, now: 1, color: true });
+  assert.ok(colored.some(line => /\x1b/.test(line)));
+  // Stripping our SGR chrome must reproduce the plain render exactly (width-safe).
+  assert.deepEqual(colored.map(stripSgr), plain);
+  // Heading carries bold plus a status color; error and truncation markers are styled.
+  assert.ok(colored[0].includes("\x1b[1m"));
+  assert.ok(colored.find(line => stripSgr(line).startsWith("error: ")).includes("\x1b[31m"));
+  assert.ok(colored.find(line => stripSgr(line).startsWith("thinking: ")).includes("\x1b[2m"));
+  assert.ok(colored.find(line => stripSgr(line).startsWith("tool: ")).includes("\x1b[36m"));
+  assert.ok(colored.filter(line => stripSgr(line).includes("truncated")).every(line => line.includes("\x1b[2m")));
+});
+
+test("heading status color follows task state", () => {
+  const base = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 1, task: { id: "t", generation: 1, name: "job", agent: "worker", status: "running", startedAt: 0 }, segments: [], truncated: false };
+  const heading = status => renderViewer({ ...base, task: { ...base.task, status } }, { columns: 80, rows: 4, now: 1, color: true })[0];
+  assert.ok(heading("running").includes("\x1b[32m"));
+  assert.ok(heading("completed").includes("\x1b[32m"));
+  assert.ok(heading("failed").includes("\x1b[31m"));
+  assert.ok(heading("aborted").includes("\x1b[31m"));
+  assert.ok(heading("paused").includes("\x1b[33m"));
+  assert.ok(heading("interrupted").includes("\x1b[33m"));
+  assert.ok(renderViewer(base, { columns: 80, rows: 4, now: 20000, disconnected: true, color: true })[0].includes("\x1b[33m"));
+});
+
+function stripSgr(text) { return text.replace(/\x1b\[[0-9;]*m/g, ""); }
+
 // Independent fixture oracle: widths are explicit for every non-ASCII grapheme
 // emitted by these tests (not inferred from the renderer's Unicode categories).
 function physicalWidth(text) {

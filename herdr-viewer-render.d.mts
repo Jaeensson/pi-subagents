@@ -8,4 +8,4 @@ export const DISCONNECTED_AFTER_MS: 10000;
 export const EXIT_AFTER_MS: 30000;
 export function sanitizeText(text: string): string;
 export function parseSnapshot(raw: string): ViewerSnapshot | undefined;
-export function renderViewer(snapshot: ViewerSnapshot, options: { columns: number; rows: number; now: number; disconnected?: boolean }): string[];
+export function renderViewer(snapshot: ViewerSnapshot, options: { columns: number; rows: number; now: number; disconnected?: boolean; color?: boolean }): string[];

@@ -58,26 +58,46 @@ function wrap(text, columns) {
   return lines;
 }
 
+// Minimal SGR chrome for the viewer pane (a color terminal: the viewer already
+// clears with CSI unconditionally). Agent content is sanitized before styling,
+// so escapes here are only ever our own. Styling wraps whole already-wrapped
+// lines, so stripping SGR reproduces the plain render exactly (width-safe).
+const SGR = { reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m", red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m", cyan: "\x1b[36m" };
+const STATUS_STYLE = {
+  running: [SGR.bold, SGR.green], completed: [SGR.bold, SGR.green],
+  failed: [SGR.bold, SGR.red], aborted: [SGR.bold, SGR.red],
+  paused: [SGR.bold, SGR.yellow], interrupted: [SGR.bold, SGR.yellow],
+  disconnected: [SGR.bold, SGR.yellow],
+};
+// Mirrors the inline trace tokens: tool calls stand out, errors are red,
+// thinking recedes; plain output and text stay unstyled for readability.
+const LABEL_STYLE = { tool: [SGR.cyan], error: [SGR.red], thinking: [SGR.dim] };
+const stain = (line, codes) => codes ? `${codes.join("")}${line}${SGR.reset}` : line;
+
 export function renderViewer(snapshot, options) {
   const columns = Math.max(1, Math.min(80, Math.floor(options.columns) || 1));
   const rows = Math.max(0, Math.floor(options.rows) || 0);
   if (!rows) return [];
+  const paint = options.color === true;
   const age = Math.max(0, options.now - snapshot.heartbeatAt);
   const state = options.disconnected || age > 10000 ? "disconnected" : snapshot.task.status;
   const heading = `${snapshot.task.name} · ${snapshot.task.agent} · ${state}`;
-  const headingLines = wrap(sanitizeText(heading), columns);
+  const headingStyle = paint ? STATUS_STYLE[state] : undefined;
+  const headingLines = wrap(sanitizeText(heading), columns).map(line => stain(line, headingStyle));
+  const markerStyle = paint ? [SGR.dim] : undefined;
   const body = [];
   for (const segment of snapshot.segments) {
     const label = segment.kind === "toolCall" ? "tool" : segment.kind === "toolOutput" ? (segment.isError ? "error" : "output") : segment.kind;
+    const lineStyle = paint ? LABEL_STYLE[label] : undefined;
     const text = sanitizeText(segment.text).replace(/\t/g, "    ");
-    for (const rawLine of text.split("\n")) body.push(...wrap(`${label}: ${rawLine}`, columns));
+    for (const rawLine of text.split("\n")) for (const line of wrap(`${label}: ${rawLine}`, columns)) body.push(stain(line, lineStyle));
   }
-  if (snapshot.truncated) body.push(...wrap("… earlier content truncated …", columns));
+  if (snapshot.truncated) for (const line of wrap("… earlier content truncated …", columns)) body.push(stain(line, markerStyle));
   if (headingLines.length >= rows) return headingLines.slice(0, rows);
   const available = rows - headingLines.length;
   if (body.length <= available) return [...headingLines, ...body];
   // Keep the heading, mark the lines the pane dropped, and retain the latest tail.
-  const marker = wrap("… earlier content truncated …", columns);
+  const marker = wrap("… earlier content truncated …", columns).map(line => stain(line, markerStyle));
   if (marker.length >= available) return [...headingLines, ...marker.slice(0, available)];
   return [...headingLines, ...marker, ...body.slice(-(available - marker.length))];
 }

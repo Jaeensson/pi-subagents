@@ -15,7 +15,7 @@ async function writePrivateIdentity(file, identity) {
 export function runViewer(paths, supplied = {}) {
   const deps = { readFile: file => fs.readFile(file, "utf8"), writeIdentity: writePrivateIdentity,
     wallNow: () => Date.now(), monotonicNow: () => performance.now(), setInterval: (fn, ms) => setInterval(fn, ms),
-    clearInterval: handle => clearInterval(handle), output: { size: () => ({ columns: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 }), write: frame => process.stdout.write(frame) }, pid: process.pid, ...supplied };
+    clearInterval: handle => clearInterval(handle), output: { size: () => ({ columns: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 }), write: frame => process.stdout.write(frame) }, pid: process.pid, color: true, ...supplied };
   const identity = paths.identity;
   let lastSeq = -1; let lastAccepted = deps.monotonicNow(); let lastFrame = "";
   let lastIdentityAt = -Infinity;
@@ -39,7 +39,7 @@ export function runViewer(paths, supplied = {}) {
     const value = acceptedSnapshot;
     const disconnected = mono - lastAccepted >= DISCONNECTED_AFTER_MS;
     const { columns, rows } = deps.output.size();
-    const frame = `\u001b[H\u001b[2J${renderViewer(value, { columns, rows, now: value.heartbeatAt, disconnected }).join("\n")}`;
+    const frame = `\u001b[H\u001b[2J${renderViewer(value, { columns, rows, now: value.heartbeatAt, disconnected, color: deps.color }).join("\n")}`;
     if (frame !== lastFrame) deps.output.write(frame);
     lastFrame = frame;
   };
