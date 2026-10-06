@@ -7,5 +7,8 @@ export const HEARTBEAT_INTERVAL_MS: 2000;
 export const DISCONNECTED_AFTER_MS: 10000;
 export const EXIT_AFTER_MS: 30000;
 export function sanitizeText(text: string): string;
+export function formatTokens(value: number): string;
+export function formatDuration(ms: number): string;
+export function metaLine(task: ViewerSnapshot["task"], now: number): string;
 export function parseSnapshot(raw: string): ViewerSnapshot | undefined;
 export function renderViewer(snapshot: ViewerSnapshot, options: { columns: number; rows: number; now: number; disconnected?: boolean; color?: boolean }): string[];

@@ -18,6 +18,7 @@ export interface ViewerSnapshot {
   version: 1; activationId: string; slotId: number; nonce: string;
   seq: number; heartbeatAt: number;
   task: { id: string; generation: number; name: string; agent: string; model?: string;
+    contextTokens?: number; contextWindow?: number;
     status: "running" | "completed" | "failed" | "aborted" | "paused" | "interrupted";
     startedAt: number; finishedAt?: number };
   segments: ViewerSegment[]; truncated: boolean;
@@ -60,6 +61,7 @@ const cleanText = (value: string): string => value
   .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
   .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F]/g, "");
 const bounded = (value: unknown, max = 80): string => cleanText(typeof value === "string" ? value : "").slice(0, max);
+const finiteCount = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 function flatten(value: unknown, depth = 0): string {
   if (depth > 3) return "…";
@@ -89,7 +91,10 @@ export function projectSnapshot(task: Task, identity: SlotIdentity, seq: number,
     version: SNAPSHOT_VERSION, activationId: bounded(identity.activationId), slotId: identity.slotId,
     nonce: bounded(identity.nonce), seq, heartbeatAt: Math.max(0, now),
     task: { id: bounded(task.id), generation: task.processGeneration ?? 0, name: bounded(task.name ?? task.agent), agent: bounded(task.agent),
-      ...(task.model ? { model: bounded(task.model) } : {}), status: task.status, startedAt: task.startedAt,
+      ...(task.model ? { model: bounded(task.model) } : {}),
+      ...(finiteCount(task.usage?.contextTokens) ? { contextTokens: Math.floor(task.usage.contextTokens) } : {}),
+      ...(finiteCount(task.contextWindow) ? { contextWindow: Math.floor(task.contextWindow) } : {}),
+      status: task.status, startedAt: task.startedAt,
       ...(task.finishedAt !== undefined ? { finishedAt: task.finishedAt } : {}) },
     segments, truncated: (task.live?.dropped ?? 0) > 0,
   };

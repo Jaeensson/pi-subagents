@@ -29,7 +29,9 @@ export function parseSnapshot(raw) {
   const t = value.task;
   if (typeof t.id !== "string" || !Number.isSafeInteger(t.generation) || t.generation < 0 || typeof t.name !== "string" ||
       typeof t.agent !== "string" || !STATUS.has(t.status) || !Number.isFinite(t.startedAt) ||
-      (t.finishedAt !== undefined && !Number.isFinite(t.finishedAt)) || (t.model !== undefined && typeof t.model !== "string")) return undefined;
+      (t.finishedAt !== undefined && !Number.isFinite(t.finishedAt)) || (t.model !== undefined && typeof t.model !== "string") ||
+      (t.contextTokens !== undefined && (typeof t.contextTokens !== "number" || !Number.isFinite(t.contextTokens) || t.contextTokens < 0)) ||
+      (t.contextWindow !== undefined && (typeof t.contextWindow !== "number" || !Number.isFinite(t.contextWindow) || t.contextWindow < 0))) return undefined;
   for (const seg of value.segments) {
     if (!seg || typeof seg !== "object" || !KINDS.has(seg.kind) || typeof seg.text !== "string" ||
         (seg.isError !== undefined && typeof seg.isError !== "boolean") || (seg.pending !== undefined && typeof seg.pending !== "boolean")) return undefined;
@@ -75,6 +77,41 @@ const STATUS_STYLE = {
 const KIND_STYLE = { toolCall: [SGR.cyan], error: [SGR.red], thinking: [SGR.dim] };
 const stain = (line, codes) => codes && line ? `${codes.join("")}${line}${SGR.reset}` : line;
 
+/** Compact token counts: 999, 12.3k, 1M. */
+export function formatTokens(value) {
+  const tokens = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
+  const trim = n => n.toFixed(1).replace(/\.0$/, "");
+  if (tokens < 1000) return String(tokens);
+  if (tokens < 1_000_000) return `${trim(tokens / 1000)}k`;
+  return `${trim(tokens / 1_000_000)}M`;
+}
+
+/** Coarse elapsed time: 0s, 45s, 1m32s, 1h5m. */
+export function formatDuration(ms) {
+  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+  const seconds = total % 60, minutes = Math.floor(total / 60) % 60, hours = Math.floor(total / 3600);
+  if (hours) return minutes ? `${hours}h${minutes}m` : `${hours}h`;
+  if (minutes) return seconds ? `${minutes}m${seconds}s` : `${minutes}m`;
+  return `${seconds}s`;
+}
+
+/** Second header line: model · context usage · runtime; unknown parts are omitted. */
+export function metaLine(task, now) {
+  const parts = [];
+  if (task.model) parts.push(task.model);
+  const tokens = task.contextTokens;
+  if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0) {
+    const window = task.contextWindow;
+    parts.push(typeof window === "number" && Number.isFinite(window) && window > 0
+      ? `ctx ${formatTokens(tokens)}/${formatTokens(window)} (${Math.round(tokens / window * 100)}%)`
+      : `ctx ${formatTokens(tokens)}`);
+  }
+  // Runtime ticks against the snapshot heartbeat and freezes once finishedAt is set.
+  const elapsed = (task.finishedAt ?? now) - task.startedAt;
+  parts.push(formatDuration(elapsed));
+  return parts.join(" · ");
+}
+
 export function renderViewer(snapshot, options) {
   // Fill the pane: the viewer owns a dedicated pane, so wrap at its real width
   // rather than a fixed editorial measure.
@@ -84,10 +121,11 @@ export function renderViewer(snapshot, options) {
   const paint = options.color === true;
   const age = Math.max(0, options.now - snapshot.heartbeatAt);
   const state = options.disconnected || age > 10000 ? "disconnected" : snapshot.task.status;
-  const heading = `${snapshot.task.name} · ${snapshot.task.agent} · ${state}`;
   const headingStyle = paint ? STATUS_STYLE[state] : undefined;
-  const headingLines = wrap(sanitizeText(heading), columns).map(line => stain(line, headingStyle));
   const markerStyle = paint ? [SGR.dim] : undefined;
+  const headingLines = wrap(sanitizeText(`${snapshot.task.name} · ${snapshot.task.agent} · ${state}`), columns).map(line => stain(line, headingStyle));
+  const metaLines = wrap(sanitizeText(metaLine(snapshot.task, options.now)), columns).map(line => stain(line, markerStyle));
+  const headerLines = [...headingLines, ...metaLines];
   const body = [];
   for (const segment of snapshot.segments) {
     const key = segment.kind === "toolOutput" && segment.isError ? "error" : segment.kind;
@@ -96,11 +134,14 @@ export function renderViewer(snapshot, options) {
     for (const rawLine of text.split("\n")) for (const line of wrap(rawLine, columns)) body.push(stain(line, lineStyle));
   }
   if (snapshot.truncated) for (const line of wrap("… earlier content truncated …", columns)) body.push(stain(line, markerStyle));
-  if (headingLines.length >= rows) return headingLines.slice(0, rows);
-  const available = rows - headingLines.length;
-  if (body.length <= available) return [...headingLines, ...body];
+  if (headerLines.length >= rows) return headerLines.slice(0, rows);
+  const available = rows - headerLines.length;
+  if (body.length <= available) return [...headerLines, ...body];
+  // The snapshot marker already sits at the body tail; retain it once instead of
+  // prepending a second identical pane-truncation marker.
+  if (snapshot.truncated) return [...headerLines, ...body.slice(-available)];
   // Keep the heading, mark the lines the pane dropped, and retain the latest tail.
   const marker = wrap("… earlier content truncated …", columns).map(line => stain(line, markerStyle));
-  if (marker.length >= available) return [...headingLines, ...marker.slice(0, available)];
-  return [...headingLines, ...marker, ...body.slice(-(available - marker.length))];
+  if (marker.length >= available) return [...headerLines, ...marker.slice(0, available)];
+  return [...headerLines, ...marker, ...body.slice(-(available - marker.length))];
 }

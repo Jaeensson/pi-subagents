@@ -81,3 +81,16 @@ test("snapshot keeps latest content, pending segment, and nonnegative age inputs
   assert.deepEqual(snapshot.segments.map(s => s.text), ["old", "latest", "thinking"]);
   assert.equal(snapshot.heartbeatAt, 100);
 });
+
+test("snapshots project context tokens and window only when finite and nonnegative", () => {
+  const full = projectSnapshot(task({ model: "opus-4", usage: { contextTokens: 12345 }, contextWindow: 200000 }), identity, 1, 100);
+  assert.equal(full.task.model, "opus-4");
+  assert.equal(full.task.contextTokens, 12345);
+  assert.equal(full.task.contextWindow, 200000);
+  const bare = projectSnapshot(task(), identity, 1, 100);
+  assert.equal(bare.task.contextTokens, undefined);
+  assert.equal(bare.task.contextWindow, undefined);
+  const bad = projectSnapshot(task({ usage: { contextTokens: -1 }, contextWindow: Number.NaN }), identity, 1, 100);
+  assert.equal(bad.task.contextTokens, undefined);
+  assert.equal(bad.task.contextWindow, undefined);
+});

@@ -209,7 +209,10 @@ to `false` closes owned viewers but keeps central activity metadata enabled;
 setting `enabled` to `false` also clears the integration's metadata. Neither
 switch stops running children.
 
-Viewer panes show sanitized text, thinking, and tool activity. Completed output
+Viewer panes show sanitized text, thinking, and tool activity under a heading
+(named task · agent · status) and a second line with the model, context usage
+(context tokens/window and percentage when known), and elapsed runtime; unknown
+fields are omitted and runtime freezes when the task finishes. Completed output
 stays visible until that pane is reused; executing tasks are never evicted.
 Panes open without stealing focus and are **not** execution backends or
 interactive child pi sessions. Display labels and activity counts do not change

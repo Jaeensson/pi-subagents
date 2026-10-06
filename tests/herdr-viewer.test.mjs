@@ -161,18 +161,21 @@ test("retains accepted content for disconnection and resize after missing or mal
   }
 });
 
-test("heartbeat-only sequences renew freshness without duplicate frame writes", async () => {
+test("heartbeat-only sequences advance displayed runtime without idle frame churn", async () => {
   const h = harness();
   const viewer = runViewer({ snapshotPath: "/snapshot", identityPath: "/identity", identity }, h.deps);
   await h.advance(0);
+  assert.equal(h.frames.length, 1);
   h.raw = snapshot(2, 3000);
   await h.advance(2000);
-  assert.equal(h.frames.length, 1);
+  // The accepted heartbeat advances the visible runtime, so exactly one new frame.
+  assert.equal(h.frames.length, 2);
   await h.advance(8000);
-  assert.equal(h.frames.length, 1);
+  // No newer accepted snapshot: renders are identical, so no further writes.
+  assert.equal(h.frames.length, 2);
   assert.match(h.frames.at(-1), /running/);
   await h.advance(2000);
-  assert.equal(h.frames.length, 2);
+  assert.equal(h.frames.length, 3);
   assert.match(h.frames.at(-1).replace(/\n/g, " "), /disconnected/i);
   await viewer.stop();
 });

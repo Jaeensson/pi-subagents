@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  sanitizeText, parseSnapshot, renderViewer, SNAPSHOT_VERSION, SNAPSHOT_MAX_BYTES,
+  sanitizeText, parseSnapshot, renderViewer, formatTokens, formatDuration, SNAPSHOT_VERSION, SNAPSHOT_MAX_BYTES,
   PUBLISH_INTERVAL_MS, VIEWER_POLL_MS, HEARTBEAT_INTERVAL_MS, DISCONNECTED_AFTER_MS, EXIT_AFTER_MS,
 } from "../herdr-viewer-render.mjs";
 
@@ -59,12 +59,13 @@ test("renders the latest tail rows with a pane-truncation marker when the trace 
   const lines = renderViewer(snapshot, { columns: 80, rows: 4, now: 1 });
   assert.deepEqual(lines, [
     "job · worker · completed",
+    "0s",
     "… earlier content truncated …",
-    "mid-4",
     "LATEST-TAIL",
   ]);
   assert.deepEqual(renderViewer(snapshot, { columns: 80, rows: 10, now: 1 }), [
     "job · worker · completed",
+    "0s",
     "EARLY-HEAD",
     "mid-2",
     "mid-3",
@@ -82,7 +83,7 @@ test("handles empty rows, heading-only traces, and snapshot-level truncation mar
     { kind: "text", text: "LATEST-TAIL" },
   ], truncated: false };
   assert.deepEqual(renderViewer(snapshot, { columns: 80, rows: 0, now: 1 }), []);
-  assert.deepEqual(renderViewer({ ...snapshot, segments: [] }, { columns: 80, rows: 4, now: 1 }), ["job · worker · completed"]);
+  assert.deepEqual(renderViewer({ ...snapshot, segments: [] }, { columns: 80, rows: 4, now: 1 }), ["job · worker · completed", "0s"]);
   const truncatedLines = renderViewer({ ...snapshot, truncated: true }, { columns: 80, rows: 7, now: 1 });
   assert.deepEqual(truncatedLines.at(-1), "… earlier content truncated …");
   assert.equal(truncatedLines.filter(line => line === "… earlier content truncated …").length, 1);
@@ -122,6 +123,50 @@ test("heading status color follows task state", () => {
   assert.ok(heading("paused").includes("\x1b[33m"));
   assert.ok(heading("interrupted").includes("\x1b[33m"));
   assert.ok(renderViewer(base, { columns: 80, rows: 4, now: 20000, disconnected: true, color: true })[0].includes("\x1b[33m"));
+});
+
+test("formats token counts and durations compactly", () => {
+  assert.equal(formatTokens(0), "0");
+  assert.equal(formatTokens(999), "999");
+  assert.equal(formatTokens(1000), "1k");
+  assert.equal(formatTokens(12345), "12.3k");
+  assert.equal(formatTokens(200000), "200k");
+  assert.equal(formatTokens(1_000_000), "1M");
+  assert.equal(formatDuration(0), "0s");
+  assert.equal(formatDuration(999), "0s");
+  assert.equal(formatDuration(45_000), "45s");
+  assert.equal(formatDuration(60_000), "1m");
+  assert.equal(formatDuration(92_000), "1m32s");
+  assert.equal(formatDuration(3_600_000), "1h");
+  assert.equal(formatDuration(3_900_000), "1h5m");
+  assert.equal(formatDuration(-5), "0s");
+});
+
+test("renders a dim meta line with model, context usage, and runtime", () => {
+  const snapshot = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 92_000, task: { id: "t", generation: 1, name: "job", agent: "worker", model: "opus-4", status: "running", startedAt: 0, contextTokens: 12345, contextWindow: 200000 }, segments: [], truncated: false };
+  assert.deepEqual(renderViewer(snapshot, { columns: 80, rows: 4, now: 92_000 }), [
+    "job · worker · running",
+    "opus-4 · ctx 12.3k/200k (6%) · 1m32s",
+  ]);
+  const colored = renderViewer(snapshot, { columns: 80, rows: 4, now: 92_000, color: true });
+  assert.ok(colored[0].includes("\x1b[1m"));
+  assert.ok(colored[1].includes("\x1b[2m"));
+  assert.deepEqual(colored.map(stripSgr), renderViewer(snapshot, { columns: 80, rows: 4, now: 92_000 }));
+  for (const columns of [1, 2, 3, 7]) {
+    const lines = renderViewer(snapshot, { columns, rows: 6, now: 92_000 });
+    assert.ok(lines.every(line => physicalWidth(line) <= columns));
+  }
+});
+
+test("meta line omits unknown fields, clamps future starts, and freezes finished runtime", () => {
+  const base = { version: 1, activationId: "a", slotId: 0, nonce: "n", seq: 1, heartbeatAt: 5000, task: { id: "t", generation: 1, name: "job", agent: "worker", status: "running", startedAt: 0 }, segments: [], truncated: false };
+  const meta = snapshot => renderViewer(snapshot, { columns: 80, rows: 4, now: 5000 })[1];
+  assert.equal(meta({ ...base, task: { ...base.task, contextTokens: 750 } }), "ctx 750 · 5s");
+  assert.equal(meta({ ...base, task: { ...base.task, model: "m" } }), "m · 5s");
+  assert.equal(meta({ ...base, task: { ...base.task, contextTokens: 0, contextWindow: 200000 } }), "5s");
+  assert.equal(meta({ ...base, task: { ...base.task, startedAt: 1000, finishedAt: 6000 } }), "5s");
+  assert.equal(meta({ ...base, task: { ...base.task, startedAt: 10000 } }), "0s");
+  assert.equal(meta({ ...base, task: { ...base.task, contextTokens: 100, contextWindow: 0 } }), "ctx 100 · 5s");
 });
 
 function stripSgr(text) { return text.replace(/\x1b\[[0-9;]*m/g, ""); }
