@@ -131,7 +131,7 @@ test("known void actions accept empty stdout while reads and creation remain str
   for (const [name] of actions) {
     for (const stdout of ["", " \n\t"]) {
       const api = createHerdrAdapter(context, async () => stdout);
-      const result = name === "runViewer" ? await api.runViewer("p", "node viewer")
+      const result = name === "runViewer" ? await api.runViewer("p", { argv: ["node", "viewer"], shellCommand: "node viewer" })
         : name === "metadata" ? await api.metadata("p", { source: "s", seq: "1" })
         : name === "viewerState" ? await api.viewerState("p", "idle", "s", "1")
         : name === "releaseViewer" ? await api.releaseViewer("p", "s", "1")
