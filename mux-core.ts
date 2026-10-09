@@ -5,7 +5,7 @@ export {
   HEARTBEAT_INTERVAL_MS, DISCONNECTED_AFTER_MS, EXIT_AFTER_MS,
 } from "./mux-viewer-render.mjs";
 
-export interface HerdrContext { binary: string; socketPath: string; callerPaneId: string }
+export interface MuxContext { binary: string; socketPath: string; callerPaneId: string }
 export interface PaneRef { paneId: string; tabId: string; workspaceId: string }
 export interface SlotIdentity { activationId: string; slotId: number; nonce: string }
 export interface SlotState {
@@ -26,7 +26,7 @@ export interface ViewerSnapshot {
 export interface ViewerIdentity { version: 1; activationId: string; slotId: number; nonce: string; pid: number; heartbeatAt: number }
 export interface TaskCounts { executing: number; queued: number; paused: number; completed: number; unsuccessful: number }
 
-export function getHerdrContext(env: NodeJS.ProcessEnv): HerdrContext | undefined {
+export function getHerdrContext(env: NodeJS.ProcessEnv): MuxContext | undefined {
   const pane = env.HERDR_PANE_ID?.trim();
   const socketPath = env.HERDR_SOCKET_PATH?.trim();
   if (env.HERDR_ENV !== "1" || !pane || !socketPath) return undefined;

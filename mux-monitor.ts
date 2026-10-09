@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { formatSummary, getHerdrContext, summarizeTasks, type HerdrContext, type PaneRef } from "./mux-core.ts";
-import type { ApiResult, HerdrAdapter } from "./herdr-adapter.ts";
+import { formatSummary, getHerdrContext, summarizeTasks, type MuxContext, type PaneRef } from "./mux-core.ts";
+import type { ApiResult, MuxAdapter } from "./mux-adapter.ts";
 import type { HerdrOptions } from "./herdr-settings.ts";
 import type { RuntimeObservation, Task, subscribeRuntimeObservations } from "./runtime.ts";
 
@@ -25,14 +25,14 @@ export const nodeMonitorClock: MonitorClock = {
 
 export type ViewerManager = { reconcile(tasks: readonly Task[], parent: PaneRef): void; stop(): Promise<void> };
 export type ViewerHost = {
-  adapter: HerdrAdapter; parent: PaneRef; cwd: string; activationId: string;
+  adapter: MuxAdapter; parent: PaneRef; cwd: string; activationId: string;
   isCurrent: () => boolean; warn: (message: string) => void;
 };
 export interface MonitorDeps {
   env: NodeJS.ProcessEnv;
   getTasks: () => readonly Task[];
   subscribe: typeof subscribeRuntimeObservations;
-  adapterFactory: (context: HerdrContext) => HerdrAdapter;
+  adapterFactory: (context: MuxContext) => MuxAdapter;
   clock: MonitorClock;
   warn: (message: string) => void;
   viewerFactory?: (host: ViewerHost) => ViewerManager;
@@ -44,8 +44,8 @@ export interface HerdrMonitor {
 }
 
 interface Activation {
-  id: string; source: string; cwd: string; context: HerdrContext; viewers: boolean;
-  raw: HerdrAdapter; api: HerdrAdapter; isCurrent: () => boolean;
+  id: string; source: string; cwd: string; context: MuxContext; viewers: boolean;
+  raw: MuxAdapter; api: MuxAdapter; isCurrent: () => boolean;
   warned: boolean; busy: boolean; dirty: boolean; startupFailed: boolean;
   reportTimer?: unknown; refreshTimer?: unknown; unsubscribe?: () => void;
   targets: Set<string>; notified: Set<string>; viewerAttempted: boolean; viewer?: ViewerManager;
@@ -56,7 +56,7 @@ function metadataSource(sessionId: string): string {
   return source.length <= 80 && /^[a-zA-Z0-9:_-]+$/.test(source)
     ? source : `pi-subagent:${createHash("sha256").update(sessionId).digest("hex")}`;
 }
-const sameContext = (a: HerdrContext, b: HerdrContext): boolean =>
+const sameContext = (a: MuxContext, b: MuxContext): boolean =>
   a.binary === b.binary && a.socketPath === b.socketPath && a.callerPaneId === b.callerPaneId;
 const stripTerminalControls = (value: string): string => value
   .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g, "")
@@ -68,7 +68,7 @@ const displayJobId = (id: string): string => stripTerminalControls(id).trim().sl
 export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
   const { clock } = deps;
   let binding: { sessionId: string; cwd: string; options: HerdrOptions } | undefined;
-  let cached: { context: HerdrContext; adapter: HerdrAdapter } | undefined;
+  let cached: { context: MuxContext; adapter: MuxAdapter } | undefined;
   let active: Activation | undefined;
   // One counter for the controller, including cleanup. Never reset on toggles.
   let sequence = 0n;

@@ -5,7 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { attemptKey, chooseSlot, projectSnapshot, type PaneRef, type SlotIdentity, type SlotState, type ViewerIdentity } from "./mux-core.ts";
-import { buildViewerCommand, classifyOccupant, type HerdrAdapter, type ProcessInfo } from "./herdr-adapter.ts";
+import { buildViewerCommand } from "./herdr-adapter.ts";
+import { classifyOccupant, type MuxAdapter, type ProcessInfo } from "./mux-adapter.ts";
 import { createSnapshotStore, type SnapshotStore } from "./mux-files.ts";
 import { nodeMonitorClock, type MonitorClock, type ViewerHost, type ViewerManager } from "./mux-monitor.ts";
 import type { Task } from "./runtime.ts";
@@ -85,7 +86,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
   const warn = (message: string) => { if (!active() || warned) return; warned = true; try { host.warn(message); } catch {} };
   const guard = (check: () => boolean) => { if (!check()) throw stale(); };
 
-  async function inspect(slot: Slot, port: HerdrAdapter, check: () => boolean): Promise<Inspection> {
+  async function inspect(slot: Slot, port: MuxAdapter, check: () => boolean): Promise<Inspection> {
     if (!slot.original) return { kind: "unknown" };
     guard(check);
     const resolved = await port.currentPane(slot.original.paneId); guard(check);
@@ -108,7 +109,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
   }
 
   // Timed work uses a scoped raw adapter, so queued commands skip after the TOTAL deadline.
-  async function budget(work: (port: HerdrAdapter, check: () => boolean) => Promise<void>): Promise<void> {
+  async function budget(work: (port: MuxAdapter, check: () => boolean) => Promise<void>): Promise<void> {
     const deadline = clock.monotonicNow() + 2000;
     let expired = false, handle: unknown;
     const check = () => !expired && clock.monotonicNow() < deadline;
@@ -119,7 +120,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
       void Promise.resolve().then(() => work(port, check)).catch(() => {}).then(finish);
     });
   }
-  async function closeEmptyTab(port: HerdrAdapter, check: () => boolean): Promise<void> {
+  async function closeEmptyTab(port: MuxAdapter, check: () => boolean): Promise<void> {
     if (!ownedTab || !check()) return;
     const listed = await port.panes(ownedTab.workspaceId); guard(check);
     // Neither labels nor a viewer's destination tab convey ownership.
@@ -127,7 +128,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
       await port.closeTab(ownedTab.tabId); guard(check);
     }
   }
-  async function cleanupSlot(slot: Slot, port: HerdrAdapter, check: () => boolean): Promise<void> {
+  async function cleanupSlot(slot: Slot, port: MuxAdapter, check: () => boolean): Promise<void> {
     const inspection = await inspect(slot, port, check); guard(check);
     if (inspection.kind !== "owned" && inspection.kind !== "shell") return;
     if (inspection.kind === "owned") {
