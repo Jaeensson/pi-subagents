@@ -86,7 +86,8 @@ export function createHerdrAdapter(context: MuxContext, exec: HerdrExec = (binar
         return action(args, id);
       },
       // These lifecycle methods target viewer panes only, never the parent pane.
-      viewerState: (id, state, source, seq) => action(["pane", "report-agent", id, "--source", source, "--seq", seq, "--agent", "pi-subagent-viewer", "--state", state], id),
+      // `label` is a tmux presentation concern; Herdr's argv must stay byte-identical.
+      viewerState: (id, state, source, seq, _label) => action(["pane", "report-agent", id, "--source", source, "--seq", seq, "--agent", "pi-subagent-viewer", "--state", state], id),
       releaseViewer: async (id, source, seq) => {
         try {
           await invokeBatch([

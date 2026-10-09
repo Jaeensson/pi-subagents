@@ -131,10 +131,12 @@ export function createTmuxAdapter(
 
   // Below the floor every operation returns before issuing any other command.
   const make = (isCurrent: () => boolean): MuxAdapter => {
-    const invoke = (args: string[], key?: string): Promise<string> => queue.schedule([async () => {
-      if (!isCurrent()) throw staleError();
-      return exec(context.binary, ["-S", context.endpoint, ...args], { timeout: COMMAND_TIMEOUT_MS, maxBuffer: MAX_BUFFER });
-    }], () => !isCurrent(), key).then(results => results[0]);
+    const runCommands = (commands: string[][], key?: string): Promise<string[]> => queue.schedule(
+      commands.map(args => async () => {
+        if (!isCurrent()) throw staleError();
+        return exec(context.binary, ["-S", context.endpoint, ...args], { timeout: COMMAND_TIMEOUT_MS, maxBuffer: MAX_BUFFER });
+      }), () => !isCurrent(), key);
+    const invoke = (args: string[], key?: string): Promise<string> => runCommands([args], key).then(results => results[0]);
     const ready = async (): Promise<ApiResult<void>> => {
       const state = await versionProbe();
       return state.ok ? success(undefined) : failure("unavailable", state.error);
@@ -225,13 +227,26 @@ export function createTmuxAdapter(
           return undefined;
         });
       },
-      viewerState: async (id, nextState) => {
+      viewerState: async (id, nextState, _source, _seq, label) => {
         const state = await ready(); if (!state.ok) return state;
-        return wrap(async () => { await invoke(["set-option", "-p", "-t", id, "@pi_viewer_state", nextState], id); return undefined; });
+        return wrap(async () => {
+          // tmux unsets only the first option name per command, so always batch the
+          // state write and, when labelled, the summary write as separate commands.
+          const commands = [["set-option", "-p", "-t", id, "@pi_viewer_state", nextState]];
+          if (label !== undefined) commands.push(["set-option", "-p", "-t", id, "@pi_viewer_summary", escapeFormatValue(label)]);
+          await runCommands(commands, id);
+          return undefined;
+        });
       },
       releaseViewer: async id => {
         const state = await ready(); if (!state.ok) return state;
-        return wrap(async () => { await invoke(["set-option", "-pu", "-t", id, "@pi_viewer_state", "@pi_viewer_summary"], id); return undefined; });
+        return wrap(async () => {
+          await runCommands([
+            ["set-option", "-pu", "-t", id, "@pi_viewer_state"],
+            ["set-option", "-pu", "-t", id, "@pi_viewer_summary"],
+          ], id);
+          return undefined;
+        });
       },
       notify: async (title, body) => {
         const state = await ready(); if (!state.ok) return state;

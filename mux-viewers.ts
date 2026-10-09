@@ -197,7 +197,8 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     const port = api.scoped(check);
     const result = inspected ?? await inspect(slot, port, check); guard(check);
     if (result.kind !== "owned") { unavailable(slot, "viewer ownership unavailable", result); return; }
-    const sent = await port.viewerState(result.pane.paneId, state, source, nextReportSeq()); guard(check);
+    const label = slot.task?.name ?? slot.task?.agent;
+    const sent = await port.viewerState(result.pane.paneId, state, source, nextReportSeq(), label); guard(check);
     if (!sent.ok) { unavailable(slot, "viewer report unavailable"); return; }
     slot.reportedState = state; slot.lastReport = clock.monotonicNow();
   }

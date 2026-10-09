@@ -200,9 +200,22 @@ test("viewerState sets the pane state and releaseViewer unsets viewer options", 
   const calls = [];
   const adapter = withVersion(calls, "");
   assert.equal((await adapter.viewerState("%1", "working", "s", "1")).ok, true);
-  assert.equal((await adapter.releaseViewer("%1", "s", "2")).ok, true);
+  // No label means no summary write.
+  assert.equal(calls.length, 1);
   assert.deepEqual(calls[0], ["-S", "/tmp/t", "set-option", "-p", "-t", "%1", "@pi_viewer_state", "working"]);
-  assert.deepEqual(calls[1], ["-S", "/tmp/t", "set-option", "-pu", "-t", "%1", "@pi_viewer_state", "@pi_viewer_summary"]);
+  assert.equal((await adapter.releaseViewer("%1", "s", "2")).ok, true);
+  // tmux 3.7c unsets only the first option name, so each option needs its own command.
+  assert.deepEqual(calls[1], ["-S", "/tmp/t", "set-option", "-pu", "-t", "%1", "@pi_viewer_state"]);
+  assert.deepEqual(calls[2], ["-S", "/tmp/t", "set-option", "-pu", "-t", "%1", "@pi_viewer_summary"]);
+  assert.equal(calls.length, 3);
+});
+
+test("viewerState writes an escaped pane summary when a label is supplied", async () => {
+  const calls = [];
+  const adapter = withVersion(calls, "");
+  assert.equal((await adapter.viewerState("%1", "idle", "s", "1", "agent#name\u001b")).ok, true);
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "set-option", "-p", "-t", "%1", "@pi_viewer_state", "idle"]);
+  assert.deepEqual(calls[1], ["-S", "/tmp/t", "set-option", "-p", "-t", "%1", "@pi_viewer_summary", "agent##name"]);
 });
 
 test("notify uses a bounded display-message and never a popup", async () => {
