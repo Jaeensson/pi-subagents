@@ -248,9 +248,15 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     if (beforeLaunch.kind !== "shell") { unavailable(slot, "viewer shell changed", beforeLaunch); return; }
     const command = buildViewerCommand(node!, deps.viewerScriptPath, slot.paths.snapshotPath, slot.paths.identityPath, slot.identity, beforeLaunch.shell!);
     if (!command) { unavailable(slot, "viewer command unsupported"); return; }
+    // Herdr runs the quoted shell command; tmux respawns with this argv directly.
+    const viewer = {
+      argv: [node!, deps.viewerScriptPath, "--snapshot", slot.paths.snapshotPath, "--identity", slot.paths.identityPath,
+        "--activation", slot.identity.activationId, "--slot", String(slot.identity.slotId), "--nonce", slot.identity.nonce],
+      shellCommand: command,
+    };
     slot.launched = true; // An issued command may start even if its response later fails.
     slot.viewedKey = slot.taskKey;
-    const launched = await port.runViewer(beforeLaunch.pane.paneId, command); guard(check);
+    const launched = await port.runViewer(beforeLaunch.pane.paneId, viewer); guard(check);
     if (!launched.ok) { unavailable(slot, "viewer launch unavailable"); return; }
     const owned = await handshake(slot, epoch); guard(check);
     if (owned.kind !== "owned") { unavailable(slot, "viewer handshake unavailable", owned); return; }

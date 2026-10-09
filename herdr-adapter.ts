@@ -73,7 +73,7 @@ export function createHerdrAdapter(context: MuxContext, exec: HerdrExec = (binar
       }),
       createTab: (workspaceId, cwd) => wrap(async () => { const r = await invoke(["tab", "create", "--workspace", workspaceId, "--cwd", cwd, "--no-focus", "--label", "Subagents"]); const tab = r.tab, root = paneRef(r.root_pane); if (!text(tab?.tab_id) || !root || root.tabId !== tab.tab_id || root.workspaceId !== workspaceId) throw new TypeError("invalid tab creation response"); return { tabId: tab.tab_id, rootPane: root }; }),
       splitPane: (id, direction, cwd) => wrap(async () => { const r = await invoke(["pane", "split", id, "--direction", direction, "--cwd", cwd, "--no-focus"]); const ref = paneRef(r.pane); if (!ref) throw new TypeError("invalid split response"); return ref; }),
-      runViewer: (id, command) => action(["pane", "run", id, command]),
+      runViewer: (id, viewer) => action(["pane", "run", id, viewer.shellCommand]),
       metadata: async (id, patch) => {
         const args = ["pane", "report-metadata", id, "--source", patch.source, "--seq", patch.seq];
         if (patch.ttlMs !== undefined) args.push("--ttl-ms", String(patch.ttlMs));
