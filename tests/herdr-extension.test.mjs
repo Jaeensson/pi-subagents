@@ -9,7 +9,7 @@ import test from "node:test";
 const home = mkdtempSync(path.join(os.tmpdir(), "subagent-herdr-entry-"));
 process.env.HOME = home;
 process.env.PI_CODING_AGENT_DIR = path.join(home, "agent");
-for (const key of ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_BIN_PATH"]) delete process.env[key];
+for (const key of ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_BIN_PATH", "TMUX", "TMUX_PANE", "PI_TMUX_BIN"]) delete process.env[key];
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 mkdirSync(agentDir, { recursive: true });
 const settingsPath = path.join(agentDir, "settings.json");

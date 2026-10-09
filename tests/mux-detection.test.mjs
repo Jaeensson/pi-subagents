@@ -21,9 +21,18 @@ test("herdr context gate requires HERDR_ENV, pane and socket", () => {
   assert.equal(getHerdrContext({ HERDR_ENV: "1", HERDR_PANE_ID: "p", HERDR_SOCKET_PATH: "/s", HERDR_BIN_PATH: "/bin/herdr" }).binary, "/bin/herdr");
 });
 
-test("PI_SUBAGENT_MUX forces herdr and rejects backends without an implementation", () => {
-  const env = { HERDR_ENV: "1", HERDR_PANE_ID: "p", HERDR_SOCKET_PATH: "/s" };
-  assert.equal(detectMux({ ...env, PI_SUBAGENT_MUX: "herdr" })?.backend, "herdr");
-  assert.equal(detectMux({ ...env, PI_SUBAGENT_MUX: "tmux" }), undefined);
+test("tmux resolves when only TMUX and TMUX_PANE are present", () => {
+  const env = { TMUX: "/tmp/t,1,0", TMUX_PANE: "%9" };
+  assert.equal(detectMux(env)?.backend, "tmux");
+  assert.deepEqual(detectMux(env)?.context, { backend: "tmux", binary: "tmux", endpoint: "/tmp/t", callerPaneId: "%9" });
+});
+
+test("PI_SUBAGENT_MUX forces a backend and still needs a resolvable context", () => {
+  const herdrEnv = { HERDR_ENV: "1", HERDR_PANE_ID: "p", HERDR_SOCKET_PATH: "/s" };
+  const both = { ...herdrEnv, TMUX: "/tmp/t,1,0", TMUX_PANE: "%9" };
+  assert.equal(detectMux({ ...both, PI_SUBAGENT_MUX: "herdr" })?.backend, "herdr");
+  assert.equal(detectMux({ ...both, PI_SUBAGENT_MUX: "tmux" })?.backend, "tmux");
+  assert.equal(detectMux({ ...herdrEnv, PI_SUBAGENT_MUX: "tmux" }), undefined);
   assert.equal(detectMux({ PI_SUBAGENT_MUX: "herdr" }), undefined); // override still needs a resolvable context
+  assert.equal(detectMux({ ...both, PI_SUBAGENT_MUX: "nonsense" }), undefined);
 });
