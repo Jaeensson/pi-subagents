@@ -33,6 +33,25 @@ export function parseTmuxVersion(output: string): { major: number; minor: number
   return { major: Number(match[1]), minor: Number(match[2]) };
 }
 
+// tmux recursively format-expands user-option values referenced by a format, so
+// a value containing `#(...)` or `#{...}` would execute a command when rendered.
+// Strip every C0/C1 control character, then double each `#` so tmux renders it
+// literally instead of expanding a format. Every user-option value the tmux
+// adapter writes passes through this guard.
+export function escapeFormatValue(value: string): string {
+  return value.replace(/[\x00-\x1F\x7F-\x9F]/g, "").replace(/#/g, "##");
+}
+
+export interface TmuxClock {
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+const realClock: TmuxClock = {
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: handle => clearTimeout(handle as NodeJS.Timeout),
+};
+
 const atFloor = (version: { major: number; minor: number }): boolean =>
   version.major > FLOOR.major || (version.major === FLOOR.major && version.minor >= FLOOR.minor);
 
@@ -63,10 +82,37 @@ type ProbeResult = { ok: true } | { ok: false; error: string };
 export function createTmuxAdapter(
   context: MuxContext,
   exec: TmuxExec = (binary, args, options) => execFile(binary, args, options).then(result => String(result.stdout)),
+  clock: TmuxClock = realClock,
 ): MuxAdapter {
   const queue = createCommandQueue();
   const staleError = () => Object.assign(new Error("scope is stale"), { stale: true });
   let probe: Promise<ProbeResult> | undefined;
+  // One scheduled TTL unset per target pane, shared across scopes: every later
+  // patch or explicit clear for that pane cancels the previous timer, so no
+  // timer outlives the report it belongs to. tmux options never expire on their
+  // own, so this scheduled unset IS the ttlMs semantics.
+  const ttlTimers = new Map<string, unknown>();
+  const cancelTtl = (id: string): void => {
+    const handle = ttlTimers.get(id);
+    if (handle !== undefined) { clock.clearTimeout(handle); ttlTimers.delete(id); }
+  };
+  // TTL cleanup is best effort and outlives any one scope: it runs through the
+  // shared queue directly, with no scope gate, and never throws.
+  const runRaw = (args: string[], key: string): void => {
+    try {
+      void queue.schedule([async () => exec(context.binary, ["-S", context.endpoint, ...args], { timeout: COMMAND_TIMEOUT_MS, maxBuffer: MAX_BUFFER })], () => false, key).catch(() => {});
+    } catch { /* queue full; the stale option is harmless until the next report */ }
+  };
+  const scheduleTtl = (id: string, windowId: string | undefined, ttlMs: number): void => {
+    cancelTtl(id);
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) return;
+    const handle = clock.setTimeout(() => {
+      ttlTimers.delete(id);
+      runRaw(["set-option", "-pu", "-t", id, "@pi_subagent_summary"], id);
+      if (windowId !== undefined) runRaw(["set-option", "-wu", "-t", windowId, "@pi_subagents"], windowId);
+    }, ttlMs);
+    ttlTimers.set(id, handle);
+  };
   // The version probe is the only command allowed below the floor. It runs
   // lazily on the first operation and its result (success or failure) is cached.
   const versionProbe = (): Promise<ProbeResult> => {
@@ -84,7 +130,6 @@ export function createTmuxAdapter(
   };
 
   // Below the floor every operation returns before issuing any other command.
-  // Task 8 replaces the remaining presentation stubs.
   const make = (isCurrent: () => boolean): MuxAdapter => {
     const invoke = (args: string[], key?: string): Promise<string> => queue.schedule([async () => {
       if (!isCurrent()) throw staleError();
@@ -98,10 +143,6 @@ export function createTmuxAdapter(
       try { return success(await fn()); } catch (error: any) { return errorResult(error); }
     };
     const queryPane = async (id: string): Promise<PaneRef> => paneRefFromText(await invoke(["display-message", "-p", "-t", id, PANE_FORMAT]));
-    const stub = (operation: string) => async (): Promise<ApiResult<never>> => {
-      const state = await ready();
-      return failure("unavailable", state.ok ? `tmux ${operation} is not implemented` : state.error);
-    };
     return {
       currentPane: async (id) => {
         const state = await ready(); if (!state.ok) return state;
@@ -142,11 +183,63 @@ export function createTmuxAdapter(
         const state = await ready(); if (!state.ok) return state;
         return wrap(async () => { await invoke(["respawn-pane", "-k", "-t", id, ...viewer.argv]); return undefined; });
       },
-      processInfo: stub("processInfo"),
-      metadata: stub("metadata"),
-      viewerState: stub("viewerState"),
-      releaseViewer: stub("releaseViewer"),
-      notify: stub("notify"),
+      processInfo: async id => {
+        const state = await ready(); if (!state.ok) return state;
+        return wrap(async () => {
+          const output = await invoke(["display-message", "-p", "-t", id, "#{pane_pid} #{pane_current_command}"]);
+          const parts = output.trim().split(/\s+/).filter(Boolean);
+          const pid = Number(parts[0]);
+          if (!Number.isSafeInteger(pid) || pid <= 0 || parts.length < 2) throw new TypeError("invalid tmux process info response");
+          return { paneId: id, shellPid: pid, foregroundProcesses: [{ pid, name: parts.slice(1).join(" ") }] };
+        });
+      },
+      metadata: async (id, patch) => {
+        const state = await ready(); if (!state.ok) return state;
+        return wrap(async () => {
+          const tokens = patch.tokens ?? {};
+          // Every patch supersedes the previous report on this pane, including
+          // the ttl timer for it; only a fresh summary re-arms the timer.
+          if (isCurrent()) cancelTtl(id);
+          if ("subagent_summary" in tokens) {
+            const value = tokens.subagent_summary;
+            if (value === null) {
+              await invoke(["set-option", "-pu", "-t", id, "@pi_subagent_summary"], id);
+              const windowId = (await queryPane(id)).tabId;
+              await invoke(["set-option", "-wu", "-t", windowId, "@pi_subagents"], id);
+            } else {
+              const escaped = escapeFormatValue(value);
+              await invoke(["set-option", "-p", "-t", id, "@pi_subagent_summary", escaped], id);
+              const windowId = (await queryPane(id)).tabId;
+              await invoke(["set-option", "-w", "-t", windowId, "@pi_subagents", escaped], id);
+              if (isCurrent() && patch.ttlMs !== undefined) scheduleTtl(id, windowId, patch.ttlMs);
+            }
+          }
+          for (const [name, label] of Object.entries(patch.stateLabels ?? {})) {
+            if (label !== undefined) await invoke(["set-option", "-p", "-t", id, `@pi_state_${name}`, escapeFormatValue(label)], id);
+          }
+          if (patch.clearStateLabels) {
+            for (const name of ["idle", "working", "blocked", "done", "unknown"]) {
+              await invoke(["set-option", "-pu", "-t", id, `@pi_state_${name}`], id);
+            }
+          }
+          return undefined;
+        });
+      },
+      viewerState: async (id, nextState) => {
+        const state = await ready(); if (!state.ok) return state;
+        return wrap(async () => { await invoke(["set-option", "-p", "-t", id, "@pi_viewer_state", nextState], id); return undefined; });
+      },
+      releaseViewer: async id => {
+        const state = await ready(); if (!state.ok) return state;
+        return wrap(async () => { await invoke(["set-option", "-pu", "-t", id, "@pi_viewer_state", "@pi_viewer_summary"], id); return undefined; });
+      },
+      notify: async (title, body) => {
+        const state = await ready(); if (!state.ok) return state;
+        return wrap(async () => {
+          await invoke(["display-message", "-d", "5000", "-t", context.callerPaneId, `${escapeFormatValue(title)} · ${escapeFormatValue(body)}`]);
+          return undefined;
+        });
+      },
       closePane: async id => {
         const state = await ready(); if (!state.ok) return state;
         return wrap(async () => { await invoke(["kill-pane", "-t", id], id); return undefined; });

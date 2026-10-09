@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getTmuxContext, parseTmuxVersion, createTmuxAdapter } from "../tmux-adapter.ts";
+import { getTmuxContext, parseTmuxVersion, createTmuxAdapter, escapeFormatValue } from "../tmux-adapter.ts";
 
 const context = getTmuxContext({ TMUX: "/tmp/t,1,0", TMUX_PANE: "%1" });
 
@@ -21,21 +21,33 @@ const operations = [
   ["closeTab", ["@1"]],
 ];
 
-// The presentation ops stay unavailable stubs until Task 8 implements them.
-const stubs = [
-  ["processInfo", ["%1"]],
-  ["metadata", ["%1", { source: "s", seq: "1" }]],
-  ["viewerState", ["%1", "idle", "s", "1"]],
-  ["releaseViewer", ["%1", "s", "1"]],
-  ["notify", ["title", "body"]],
-];
-
 // Records real commands while answering the version probe with a supported tmux.
 const withVersion = (calls, output) => createTmuxAdapter(context, async (_binary, args) => {
   if (args.includes("-V")) return "tmux 3.7c";
   calls.push(args);
   return output;
 });
+
+// A supported tmux that resolves pane lookups to %1/@4 and returns empty output
+// for every option write. An optional clock keeps TTL timers off the real event loop.
+const withPane = (calls, clock) => createTmuxAdapter(context, async (_binary, args) => {
+  if (args.includes("-V")) return "tmux 3.7c";
+  calls.push(args);
+  return args.includes("display-message") ? "%1 @4 $0" : "";
+}, clock);
+
+// A clock that records scheduled timers so adapter TTL behavior is observable.
+const recordingClock = () => {
+  const scheduled = new Map();
+  let next = 0;
+  return {
+    clock: {
+      setTimeout: (fn, ms) => { const handle = ++next; scheduled.set(handle, { fn, ms }); return handle; },
+      clearTimeout: handle => { scheduled.delete(handle); },
+    },
+    scheduled,
+  };
+};
 
 test("tmux context requires TMUX and TMUX_PANE and records the socket", () => {
   assert.equal(getTmuxContext({ TMUX: "/tmp/tmux-1000/default,42,0" }), undefined);
@@ -91,24 +103,136 @@ test("an unparseable version is unavailable after only the probe", async () => {
   assert.deepEqual(calls, [["-S", "/tmp/t", "-V"]]);
 });
 
-test("at or above the floor the presentation operations remain complete not-implemented stubs", async () => {
+test("format values strip controls and escape every hash", () => {
+  assert.equal(escapeFormatValue("a#(rm -rf /)\u001b[31mb"), "a##(rm -rf /)[31mb");
+  assert.equal(escapeFormatValue("plain"), "plain");
+  assert.equal(escapeFormatValue("#{@x}\u0007"), "##{@x}");
+  assert.equal(escapeFormatValue("a\u001b]0;t\u0007b#(y)"), "a]0;tb##(y)");
+});
+
+test("metadata writes the parent summary and mirrors the aggregate window option", async () => {
   const calls = [];
-  const exec = async (_b, args, options) => {
-    assert.deepEqual(args, ["-S", "/tmp/t", "-V"]);
-    assert.ok(options.timeout >= 1000);
+  const adapter = withPane(calls, recordingClock().clock);
+  const result = await adapter.metadata("%1", { source: "s", seq: "1", ttlMs: 15000, tokens: { subagent_summary: "running 2" } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "set-option", "-p", "-t", "%1", "@pi_subagent_summary", "running 2"]);
+  assert.deepEqual(calls[1], ["-S", "/tmp/t", "display-message", "-p", "-t", "%1", "#{pane_id} #{window_id} #{session_id}"]);
+  assert.deepEqual(calls[2], ["-S", "/tmp/t", "set-option", "-w", "-t", "@4", "@pi_subagents", "running 2"]);
+});
+
+test("metadata escapes format values before writing them", async () => {
+  const calls = [];
+  const adapter = withPane(calls);
+  await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "\u001b[31m#(rm -rf /)" } });
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "set-option", "-p", "-t", "%1", "@pi_subagent_summary", "[31m##(rm -rf /)"]);
+  assert.deepEqual(calls[2], ["-S", "/tmp/t", "set-option", "-w", "-t", "@4", "@pi_subagents", "[31m##(rm -rf /)"]);
+});
+
+test("metadata with a null token unsets it, clears the mirror, and cancels the ttl timer", async () => {
+  const calls = [];
+  const { clock, scheduled } = recordingClock();
+  const adapter = createTmuxAdapter(context, async (_binary, args) => {
+    if (args.includes("-V")) return "tmux 3.7c";
     calls.push(args);
-    return "tmux 3.7c";
-  };
-  const adapter = createTmuxAdapter(context, exec);
-  for (const [name, args] of stubs) {
-    const result = await adapter[name](...args);
-    assert.equal(result.ok, false, `${name} is still a stub`);
-    assert.equal(result.reason, "unavailable");
-    assert.equal(result.error, `tmux ${name} is not implemented`);
+    return args.includes("display-message") ? "%1 @4 $0" : "";
+  }, clock);
+  await adapter.metadata("%1", { source: "s", seq: "1", ttlMs: 15000, tokens: { subagent_summary: "running 2" } });
+  assert.equal(scheduled.size, 1);
+  calls.length = 0;
+  await adapter.metadata("%1", { source: "s", seq: "2", tokens: { subagent_summary: null } });
+  assert.equal(scheduled.size, 0);
+  const argv = calls.map(c => c.join(" "));
+  assert.ok(argv.includes("-S /tmp/t set-option -pu -t %1 @pi_subagent_summary"));
+  assert.ok(argv.includes("-S /tmp/t set-option -wu -t @4 @pi_subagents"));
+});
+
+test("metadata holds at most one ttl timer per target and replaces it on every patch", async () => {
+  const calls = [];
+  const { clock, scheduled } = recordingClock();
+  const adapter = createTmuxAdapter(context, async (_binary, args) => {
+    if (args.includes("-V")) return "tmux 3.7c";
+    calls.push(args);
+    return args.includes("display-message") ? "%1 @4 $0" : "";
+  }, clock);
+  await adapter.metadata("%1", { source: "s", seq: "1", ttlMs: 1000, tokens: { subagent_summary: "a" } });
+  assert.equal(scheduled.size, 1);
+  const first = [...scheduled.keys()][0];
+  await adapter.metadata("%1", { source: "s", seq: "2", ttlMs: 2000, tokens: { subagent_summary: "b" } });
+  assert.equal(scheduled.size, 1);
+  assert.notEqual([...scheduled.keys()][0], first);
+  await adapter.metadata("%2", { source: "s", seq: "3", ttlMs: 3000, tokens: { subagent_summary: "c" } });
+  assert.equal(scheduled.size, 2);
+});
+
+test("a ttl timer unsets the summary and the window aggregate when it fires", async () => {
+  const calls = [];
+  const { clock, scheduled } = recordingClock();
+  const adapter = createTmuxAdapter(context, async (_binary, args) => {
+    if (args.includes("-V")) return "tmux 3.7c";
+    calls.push(args);
+    return args.includes("display-message") ? "%1 @4 $0" : "";
+  }, clock);
+  await adapter.metadata("%1", { source: "s", seq: "1", ttlMs: 5000, tokens: { subagent_summary: "run" } });
+  assert.equal(scheduled.size, 1);
+  calls.length = 0;
+  scheduled.values().next().value.fn();
+  await new Promise(resolve => setImmediate(resolve));
+  const argv = calls.map(c => c.join(" "));
+  assert.ok(argv.includes("-S /tmp/t set-option -pu -t %1 @pi_subagent_summary"));
+  assert.ok(argv.includes("-S /tmp/t set-option -wu -t @4 @pi_subagents"));
+});
+
+test("metadata writes and clears per-state labels", async () => {
+  const calls = [];
+  const adapter = withVersion(calls, "");
+  await adapter.metadata("%1", { source: "s", seq: "1", stateLabels: { working: "run#1", done: "ok" } });
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "set-option", "-p", "-t", "%1", "@pi_state_working", "run##1"]);
+  assert.deepEqual(calls[1], ["-S", "/tmp/t", "set-option", "-p", "-t", "%1", "@pi_state_done", "ok"]);
+  calls.length = 0;
+  await adapter.metadata("%1", { source: "s", seq: "2", clearStateLabels: true });
+  const argv = calls.map(c => c.join(" "));
+  for (const state of ["idle", "working", "blocked", "done", "unknown"]) {
+    assert.ok(argv.includes(`-S /tmp/t set-option -pu -t %1 @pi_state_${state}`), `clears @pi_state_${state}`);
   }
-  assert.equal((await adapter.scoped(() => true).notify("a", "b")).reason, "unavailable");
-  // The probe runs once and is cached for every operation.
-  assert.deepEqual(calls, [["-S", "/tmp/t", "-V"]]);
+});
+
+test("viewerState sets the pane state and releaseViewer unsets viewer options", async () => {
+  const calls = [];
+  const adapter = withVersion(calls, "");
+  assert.equal((await adapter.viewerState("%1", "working", "s", "1")).ok, true);
+  assert.equal((await adapter.releaseViewer("%1", "s", "2")).ok, true);
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "set-option", "-p", "-t", "%1", "@pi_viewer_state", "working"]);
+  assert.deepEqual(calls[1], ["-S", "/tmp/t", "set-option", "-pu", "-t", "%1", "@pi_viewer_state", "@pi_viewer_summary"]);
+});
+
+test("notify uses a bounded display-message and never a popup", async () => {
+  const calls = [];
+  const adapter = withVersion(calls, "");
+  await adapter.notify("Batch completed", "2 tasks");
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "display-message", "-d", "5000", "-t", "%1", "Batch completed · 2 tasks"]);
+  assert.ok(!calls.map(c => c.join(" ")).some(a => a.includes("display-popup")));
+});
+
+test("notify escapes both the title and the body", async () => {
+  const calls = [];
+  const adapter = withVersion(calls, "");
+  await adapter.notify("a#(x)", "b#{y}");
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "display-message", "-d", "5000", "-t", "%1", "a##(x) · b##{y}"]);
+});
+
+test("processInfo reports pane_pid and the current command as the single foreground process", async () => {
+  const calls = [];
+  const adapter = withVersion(calls, "12345 fish");
+  assert.deepEqual((await adapter.processInfo("%1")).value,
+    { paneId: "%1", shellPid: 12345, foregroundProcesses: [{ pid: 12345, name: "fish" }] });
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "display-message", "-p", "-t", "%1", "#{pane_pid} #{pane_current_command}"]);
+});
+
+test("processInfo rejects a malformed pane process response", async () => {
+  const adapter = withVersion([], "not-a-pid fish");
+  const result = await adapter.processInfo("%1");
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "invalid");
 });
 
 test("a version-probe failure is a bounded unavailable result, not an exception", async () => {
