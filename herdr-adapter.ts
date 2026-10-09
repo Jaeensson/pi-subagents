@@ -1,6 +1,7 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { MuxContext, PaneRef, SlotIdentity } from "./mux-core.ts";
+import { createCommandQueue } from "./mux-adapter.ts";
 import type { ApiResult, MuxAdapter } from "./mux-adapter.ts";
 export { classifyOccupant } from "./mux-adapter.ts";
 
@@ -30,57 +31,11 @@ function parseOutput(output: string): any {
 const processId = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
 
 export function createHerdrAdapter(context: MuxContext, exec: HerdrExec = (binary, args, options) => execFile(binary, args, options).then(r => String(r.stdout))): MuxAdapter {
-  let active = 0;
-  // All waiting commands, including same-pane serialization, live in this queue.
-  const queue: Array<{ key?: string; run: () => void; stale: () => boolean; reject: (error: Error) => void }> = [];
-  const activeKeys = new Set<string>();
+  const queue = createCommandQueue();
   const staleError = () => Object.assign(new Error("scope is stale"), { stale: true });
-  const dispatch = () => {
-    for (let i = 0; i < queue.length;) {
-      if (queue[i].stale()) queue.splice(i, 1)[0].reject(staleError());
-      else i++;
-    }
-    while (active < 4) {
-      const index = queue.findIndex(item => item.key === undefined || !activeKeys.has(item.key));
-      if (index < 0) break;
-      const item = queue.splice(index, 1)[0];
-      active++;
-      if (item.key !== undefined) activeKeys.add(item.key);
-      item.run();
-    }
-  };
-  const schedule = async (work: Array<() => Promise<any>>, stale: () => boolean, key?: string): Promise<any[]> => {
-    if (stale()) throw staleError();
-    dispatch();
-    // Reserve a whole batch (release + presentation clear) or none of it.
-    // Free executor slots count only if their pane is actually dispatchable.
-    const keys = new Set(activeKeys); let free = 4 - active; let immediate = 0;
-    for (const item of [...queue, ...work.map(() => ({ key }))]) {
-      if (free && (item.key === undefined || !keys.has(item.key))) {
-        free--; immediate++;
-        if (item.key !== undefined) keys.add(item.key);
-      }
-    }
-    if (queue.length + work.length - immediate > 32) throw Object.assign(new Error("Herdr command queue is full"), { unavailable: true });
-    const pending = work.map(fn => new Promise<any>((resolve, reject) => {
-      queue.push({ key, stale, reject, run: () => {
-        Promise.resolve().then(fn).then(resolve, reject).finally(() => {
-          active--;
-          if (key !== undefined) activeKeys.delete(key);
-          dispatch();
-        });
-      } });
-    }));
-    dispatch();
-    // Settle every admitted command, so a failed release still clears presentation.
-    const results = await Promise.allSettled(pending);
-    const failed = results.find(r => r.status === "rejected");
-    if (failed?.status === "rejected") throw failed.reason;
-    return results.map(r => (r as PromiseFulfilledResult<any>).value);
-  };
 
   const make = (isCurrent: () => boolean): MuxAdapter => {
-    const invokeBatch = (commands: string[][], caller = context.callerPaneId, key?: string, voidActions = false): Promise<any[]> => schedule(commands.map(args => async () => {
+    const invokeBatch = (commands: string[][], caller = context.callerPaneId, key?: string, voidActions = false): Promise<any[]> => queue.schedule(commands.map(args => async () => {
       if (!isCurrent()) throw staleError();
       const output = await exec(context.binary, args, { env: { ...process.env, HERDR_SOCKET_PATH: context.socketPath, HERDR_PANE_ID: caller }, timeout: 2000, maxBuffer: 64 * 1024 });
       if (voidActions && output.trim() === "") return undefined;
