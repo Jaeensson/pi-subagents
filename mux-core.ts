@@ -5,7 +5,8 @@ export {
   HEARTBEAT_INTERVAL_MS, DISCONNECTED_AFTER_MS, EXIT_AFTER_MS,
 } from "./mux-viewer-render.mjs";
 
-export interface MuxContext { binary: string; socketPath: string; callerPaneId: string }
+export type MuxBackend = "herdr" | "tmux";
+export interface MuxContext { backend: MuxBackend; binary: string; endpoint: string; callerPaneId: string }
 export interface PaneRef { paneId: string; tabId: string; workspaceId: string }
 export interface SlotIdentity { activationId: string; slotId: number; nonce: string }
 export interface SlotState {
@@ -25,13 +26,6 @@ export interface ViewerSnapshot {
 }
 export interface ViewerIdentity { version: 1; activationId: string; slotId: number; nonce: string; pid: number; heartbeatAt: number }
 export interface TaskCounts { executing: number; queued: number; paused: number; completed: number; unsuccessful: number }
-
-export function getHerdrContext(env: NodeJS.ProcessEnv): MuxContext | undefined {
-  const pane = env.HERDR_PANE_ID?.trim();
-  const socketPath = env.HERDR_SOCKET_PATH?.trim();
-  if (env.HERDR_ENV !== "1" || !pane || !socketPath) return undefined;
-  return { binary: env.HERDR_BIN_PATH?.trim() || "herdr", socketPath, callerPaneId: pane };
-}
 
 export function attemptKey(task: Pick<Task, "id" | "processGeneration">): string {
   return `${task.id}:${task.processGeneration ?? 0}`;

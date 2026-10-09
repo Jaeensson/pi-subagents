@@ -42,7 +42,7 @@ function harness(options = {}) {
     stores.push(store);
     return store;
   };
-  const api = createHerdrAdapter({ binary: "fake-herdr", socketPath: "/socket", callerPaneId: "parent" }, async (_, args, env) => {
+  const api = createHerdrAdapter({ backend: "herdr", binary: "fake-herdr", endpoint: "/socket", callerPaneId: "parent" }, async (_, args, env) => {
     calls.push({ args, caller: env.env.HERDR_PANE_ID, at: time.wallNow() });
     if (options.holdVerb === args[1]) await options.hold.promise;
     if (options.onCommand) await options.onCommand(args);

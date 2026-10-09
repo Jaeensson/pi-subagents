@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  getHerdrContext, attemptKey, summarizeTasks, formatSummary, projectSnapshot,
+  attemptKey, summarizeTasks, formatSummary, projectSnapshot,
   encodeSnapshot, chooseSlot, SNAPSHOT_MAX_BYTES,
 } from "../mux-core.ts";
 
@@ -15,11 +15,7 @@ function task(overrides = {}) {
 }
 const identity = { activationId: "activation", slotId: 0, nonce: "nonce" };
 
-test("context gate and attempt identity", () => {
-  assert.equal(getHerdrContext({ HERDR_ENV: "0" }), undefined);
-  assert.equal(getHerdrContext({ HERDR_ENV: "1", HERDR_PANE_ID: "p" }), undefined);
-  assert.deepEqual(getHerdrContext({ HERDR_ENV: "1", HERDR_PANE_ID: "p", HERDR_SOCKET_PATH: "/s" }), { binary: "herdr", socketPath: "/s", callerPaneId: "p" });
-  assert.equal(getHerdrContext({ HERDR_ENV: "1", HERDR_PANE_ID: "p", HERDR_SOCKET_PATH: "/s", HERDR_BIN_PATH: "/bin/herdr" }).binary, "/bin/herdr");
+test("attempt identity", () => {
   assert.equal(attemptKey(task({ id: "x", processGeneration: 2 })), "x:2");
   assert.notEqual(attemptKey(task({ processGeneration: 2 })), attemptKey(task({ processGeneration: 3 })));
 });

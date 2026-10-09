@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { formatSummary, getHerdrContext, summarizeTasks, type MuxContext, type PaneRef } from "./mux-core.ts";
+import { formatSummary, summarizeTasks, type MuxContext, type PaneRef } from "./mux-core.ts";
+import type { detectMux } from "./mux-detection.ts";
 import type { ApiResult, MuxAdapter } from "./mux-adapter.ts";
 import type { HerdrOptions } from "./herdr-settings.ts";
 import type { RuntimeObservation, Task, subscribeRuntimeObservations } from "./runtime.ts";
@@ -32,6 +33,7 @@ export interface MonitorDeps {
   env: NodeJS.ProcessEnv;
   getTasks: () => readonly Task[];
   subscribe: typeof subscribeRuntimeObservations;
+  detect: typeof detectMux;
   adapterFactory: (context: MuxContext) => MuxAdapter;
   clock: MonitorClock;
   warn: (message: string) => void;
@@ -57,7 +59,7 @@ function metadataSource(sessionId: string): string {
     ? source : `pi-subagent:${createHash("sha256").update(sessionId).digest("hex")}`;
 }
 const sameContext = (a: MuxContext, b: MuxContext): boolean =>
-  a.binary === b.binary && a.socketPath === b.socketPath && a.callerPaneId === b.callerPaneId;
+  a.backend === b.backend && a.binary === b.binary && a.endpoint === b.endpoint && a.callerPaneId === b.callerPaneId;
 const stripTerminalControls = (value: string): string => value
   .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g, "")
   .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
@@ -198,8 +200,9 @@ export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
   }
   function activate(): void {
     if (!binding?.options.enabled) return;
-    const context = getHerdrContext(deps.env);
-    if (!context) return;
+    const detected = deps.detect(deps.env);
+    if (!detected) return;
+    const { context } = detected;
     const seed = clock.wallNow();
     if (Number.isFinite(seed)) sequence = sequence > BigInt(Math.max(0, Math.floor(seed))) * 1000n
       ? sequence : BigInt(Math.max(0, Math.floor(seed))) * 1000n;

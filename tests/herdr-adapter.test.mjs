@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildViewerCommand, classifyOccupant, createHerdrAdapter } from "../herdr-adapter.ts";
 
-const context = { binary: "herdr", socketPath: "/tmp/socket", callerPaneId: "caller" };
+const context = { backend: "herdr", binary: "herdr", endpoint: "/tmp/socket", callerPaneId: "caller" };
 // Installed 0.8.2 envelopes: success_response requires id/result, not ok.
 const ok = (value, type = value.pane ? "pane_info" : value.panes ? "pane_list" : value.process_info ? "pane_process_info" : value.tab ? "tab_created" : "ok") => JSON.stringify({ id: "cli:test", result: { type, ...value } });
 const errorEnvelope = (code, message = "gone") => JSON.stringify({ id: "cli:test", error: { code, message } });

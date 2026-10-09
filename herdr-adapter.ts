@@ -8,6 +8,14 @@ export { classifyOccupant } from "./mux-adapter.ts";
 export type HerdrExec = (binary: string, args: string[], options: { env: NodeJS.ProcessEnv; timeout: number; maxBuffer: number; signal?: AbortSignal }) => Promise<string>;
 
 const execFile = promisify(nodeExecFile);
+
+export function getHerdrContext(env: NodeJS.ProcessEnv): MuxContext | undefined {
+  const pane = env.HERDR_PANE_ID?.trim();
+  const endpoint = env.HERDR_SOCKET_PATH?.trim();
+  if (env.HERDR_ENV !== "1" || !pane || !endpoint) return undefined;
+  return { backend: "herdr", binary: env.HERDR_BIN_PATH?.trim() || "herdr", endpoint, callerPaneId: pane };
+}
+
 const success = <T>(value: T): ApiResult<T> => ({ ok: true, value });
 const failure = (reason: "missing" | "unavailable" | "invalid", error: string): ApiResult<never> => ({ ok: false, reason, error });
 const text = (value: unknown): string | undefined => typeof value === "string" && value.length ? value : undefined;
@@ -37,7 +45,7 @@ export function createHerdrAdapter(context: MuxContext, exec: HerdrExec = (binar
   const make = (isCurrent: () => boolean): MuxAdapter => {
     const invokeBatch = (commands: string[][], caller = context.callerPaneId, key?: string, voidActions = false): Promise<any[]> => queue.schedule(commands.map(args => async () => {
       if (!isCurrent()) throw staleError();
-      const output = await exec(context.binary, args, { env: { ...process.env, HERDR_SOCKET_PATH: context.socketPath, HERDR_PANE_ID: caller }, timeout: 2000, maxBuffer: 64 * 1024 });
+      const output = await exec(context.binary, args, { env: { ...process.env, HERDR_SOCKET_PATH: context.endpoint, HERDR_PANE_ID: caller }, timeout: 2000, maxBuffer: 64 * 1024 });
       if (voidActions && output.trim() === "") return undefined;
       return parseOutput(output);
     }), () => !isCurrent(), key);

@@ -1,6 +1,5 @@
 import type { PaneRef, ViewerIdentity } from "./mux-core.ts";
-
-export type MuxBackend = "herdr" | "tmux";
+export type { MuxBackend } from "./mux-core.ts";
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; reason: "missing" | "unavailable" | "invalid"; error: string };
 export interface ProcessInfo { paneId: string; shellPid?: number; foregroundProcessGroupId?: number; foregroundProcesses: Array<{ pid: number; name: string; argv?: string[] }> }
 export interface MetadataPatch { source: string; seq: string; ttlMs?: number; tokens?: Record<string, string | null>; stateLabels?: Partial<Record<"idle" | "working" | "blocked" | "done" | "unknown", string>>; clearStateLabels?: boolean }

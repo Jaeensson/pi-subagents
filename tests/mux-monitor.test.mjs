@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHerdrMonitor } from "../mux-monitor.ts";
 import { createHerdrAdapter } from "../herdr-adapter.ts";
+import { detectMux } from "../mux-detection.ts";
 import { checkJobComplete, emptyUsage, setMessageSender, subscribeRuntimeObservations } from "../runtime.ts";
 import { emptyLiveTrace } from "../live.ts";
 
@@ -50,6 +51,7 @@ function harness(overrides = {}) {
   const deps = {
     env: overrides.env ?? env, clock, getTasks: () => tasks,
     subscribe: overrides.subscribe ?? (listener => { listeners.add(listener); return () => listeners.delete(listener); }),
+    detect: overrides.detect ?? detectMux,
     adapterFactory: context => { adapterCalls++; return overrides.adapterFactory ? overrides.adapterFactory(context) : createHerdrAdapter(context, exec); },
     warn: message => warnings.push(message),
     viewerFactory: host => {

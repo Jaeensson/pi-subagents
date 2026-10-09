@@ -33,6 +33,7 @@
 import path from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHerdrAdapter } from "./herdr-adapter.ts";
+import { detectMux } from "./mux-detection.ts";
 import { createHerdrMonitor, nodeMonitorClock, type HerdrMonitor } from "./mux-monitor.ts";
 import { readHerdrOptions } from "./herdr-settings.ts";
 import { createViewerManager } from "./mux-viewers.ts";
@@ -84,6 +85,7 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 				(task) => jobs.get(task.jobId)?.parentSessionId === boundSessionId,
 			),
 			subscribe: subscribeRuntimeObservations,
+			detect: detectMux,
 			adapterFactory: createHerdrAdapter,
 			clock: nodeMonitorClock,
 			viewerFactory: createViewerManager,
