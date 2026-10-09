@@ -15,5 +15,5 @@
     "noUnusedParameters": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["index.ts", "agents.ts", "core.ts", "live.ts", "runtime.ts", "process.ts", "jobs.ts", "tui.ts", "watch-render.ts", "watch.ts", "settings.ts", "command-subagents.ts", "herdr-*.ts", "herdr-*.d.mts", "tools/*.ts"]
+  "include": ["index.ts", "agents.ts", "core.ts", "live.ts", "runtime.ts", "process.ts", "jobs.ts", "tui.ts", "watch-render.ts", "watch.ts", "settings.ts", "command-subagents.ts", "herdr-*.ts", "mux-*.ts", "mux-*.d.mts", "tools/*.ts"]
 }

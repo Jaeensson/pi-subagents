@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { formatSummary, getHerdrContext, summarizeTasks, type HerdrContext, type PaneRef } from "./herdr-core.ts";
+import { formatSummary, getHerdrContext, summarizeTasks, type HerdrContext, type PaneRef } from "./mux-core.ts";
 import type { ApiResult, HerdrAdapter } from "./herdr-adapter.ts";
 import type { HerdrOptions } from "./herdr-settings.ts";
 import type { RuntimeObservation, Task, subscribeRuntimeObservations } from "./runtime.ts";

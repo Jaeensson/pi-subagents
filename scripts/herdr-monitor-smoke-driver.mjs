@@ -39,9 +39,9 @@ export async function runSmokeDriver() {
   assert.equal(sdk.getAgentDir(), path.join(root, "agent"));
   sdk.initTheme();
   const { default: extension } = await import("../index.ts");
-  const { createHerdrMonitor, nodeMonitorClock } = await import("../herdr-monitor.ts");
-  const { createViewerManager } = await import("../herdr-viewers.ts");
-  const { createSnapshotStore } = await import("../herdr-files.ts");
+  const { createHerdrMonitor, nodeMonitorClock } = await import("../mux-monitor.ts");
+  const { createViewerManager } = await import("../mux-viewers.ts");
+  const { createSnapshotStore } = await import("../mux-files.ts");
   const { spawnTask } = await import("../process.ts");
   const runtime = await import("../runtime.ts");
   const { writeManifest } = await import("../store.ts");

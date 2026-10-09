@@ -1,9 +1,9 @@
 import type { Task } from "./runtime.ts";
-import { SNAPSHOT_VERSION, SNAPSHOT_MAX_BYTES } from "./herdr-viewer-render.mjs";
+import { SNAPSHOT_VERSION, SNAPSHOT_MAX_BYTES } from "./mux-viewer-render.mjs";
 export {
   SNAPSHOT_VERSION, SNAPSHOT_MAX_BYTES, PUBLISH_INTERVAL_MS, VIEWER_POLL_MS,
   HEARTBEAT_INTERVAL_MS, DISCONNECTED_AFTER_MS, EXIT_AFTER_MS,
-} from "./herdr-viewer-render.mjs";
+} from "./mux-viewer-render.mjs";
 
 export interface HerdrContext { binary: string; socketPath: string; callerPaneId: string }
 export interface PaneRef { paneId: string; tabId: string; workspaceId: string }

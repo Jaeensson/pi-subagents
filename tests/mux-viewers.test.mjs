@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createViewerManager, resolveViewerNode } from "../herdr-viewers.ts";
+import { createViewerManager, resolveViewerNode } from "../mux-viewers.ts";
 import { createHerdrAdapter } from "../herdr-adapter.ts";
-import { createSnapshotStore } from "../herdr-files.ts";
+import { createSnapshotStore } from "../mux-files.ts";
 import { emptyLiveTrace } from "../live.ts";
-import { runViewer } from "../herdr-viewer.mjs";
+import { runViewer } from "../mux-viewer.mjs";
 
 const deferred = () => { let resolve, reject; const promise = new Promise((y, n) => { resolve = y; reject = n; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };

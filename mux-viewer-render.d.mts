@@ -1,4 +1,4 @@
-import type { ViewerSnapshot } from "./herdr-core.ts";
+import type { ViewerSnapshot } from "./mux-core.ts";
 export const SNAPSHOT_VERSION: 1;
 export const SNAPSHOT_MAX_BYTES: 131072;
 export const PUBLISH_INTERVAL_MS: 250;

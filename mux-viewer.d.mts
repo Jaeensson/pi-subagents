@@ -1,5 +1,5 @@
-import type { SlotIdentity } from "./herdr-core.ts";
-import type { ViewerIdentity, ViewerSnapshot } from "./herdr-core.ts";
+import type { SlotIdentity } from "./mux-core.ts";
+import type { ViewerIdentity, ViewerSnapshot } from "./mux-core.ts";
 export interface ViewerDeps {
   readFile(path: string): Promise<string>;
   writeIdentity(path: string, identity: ViewerIdentity): Promise<void>;

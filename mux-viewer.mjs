@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { DISCONNECTED_AFTER_MS, EXIT_AFTER_MS, HEARTBEAT_INTERVAL_MS, VIEWER_POLL_MS, parseSnapshot, renderViewer } from "./herdr-viewer-render.mjs";
+import { DISCONNECTED_AFTER_MS, EXIT_AFTER_MS, HEARTBEAT_INTERVAL_MS, VIEWER_POLL_MS, parseSnapshot, renderViewer } from "./mux-viewer-render.mjs";
 
 async function writePrivateIdentity(file, identity) {
   const temp = path.join(path.dirname(file), `.identity-${process.pid}-${Math.random().toString(16).slice(2)}`);

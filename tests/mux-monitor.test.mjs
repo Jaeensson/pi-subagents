@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHerdrMonitor } from "../herdr-monitor.ts";
+import { createHerdrMonitor } from "../mux-monitor.ts";
 import { createHerdrAdapter } from "../herdr-adapter.ts";
 import { checkJobComplete, emptyUsage, setMessageSender, subscribeRuntimeObservations } from "../runtime.ts";
 import { emptyLiveTrace } from "../live.ts";

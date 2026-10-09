@@ -33,9 +33,9 @@
 import path from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHerdrAdapter } from "./herdr-adapter.ts";
-import { createHerdrMonitor, nodeMonitorClock, type HerdrMonitor } from "./herdr-monitor.ts";
+import { createHerdrMonitor, nodeMonitorClock, type HerdrMonitor } from "./mux-monitor.ts";
 import { readHerdrOptions } from "./herdr-settings.ts";
-import { createViewerManager } from "./herdr-viewers.ts";
+import { createViewerManager } from "./mux-viewers.ts";
 import { beginTaskShutdown, markInterruptedSweep, resumeTaskSpawning, shutdownTaskProcesses } from "./process.ts";
 import { seedBundledAgents } from "./agents.ts";
 import {

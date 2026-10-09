@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   getHerdrContext, attemptKey, summarizeTasks, formatSummary, projectSnapshot,
   encodeSnapshot, chooseSlot, SNAPSHOT_MAX_BYTES,
-} from "../herdr-core.ts";
+} from "../mux-core.ts";
 
 function task(overrides = {}) {
   return {

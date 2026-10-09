@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSnapshotStore } from "../herdr-files.ts";
-import { parseSnapshot } from "../herdr-viewer-render.mjs";
+import { createSnapshotStore } from "../mux-files.ts";
+import { parseSnapshot } from "../mux-viewer-render.mjs";
 
 const identity = { activationId: "activation", slotId: 0, nonce: "nonce" };
 function deferred() {

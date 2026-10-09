@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runViewer } from "../herdr-viewer.mjs";
+import { runViewer } from "../mux-viewer.mjs";
 
 const identity = { activationId: "a", slotId: 0, nonce: "n" };
 function deferred() {

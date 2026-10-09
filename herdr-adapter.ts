@@ -1,6 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { HerdrContext, PaneRef, SlotIdentity, ViewerIdentity } from "./herdr-core.ts";
+import type { HerdrContext, PaneRef, SlotIdentity, ViewerIdentity } from "./mux-core.ts";
 
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; reason: "missing" | "unavailable" | "invalid"; error: string };
 export type HerdrExec = (binary: string, args: string[], options: { env: NodeJS.ProcessEnv; timeout: number; maxBuffer: number; signal?: AbortSignal }) => Promise<string>;

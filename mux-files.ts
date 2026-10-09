@@ -1,8 +1,8 @@
 import * as nodeFs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { SlotIdentity, ViewerIdentity, ViewerSnapshot } from "./herdr-core.ts";
-import { SNAPSHOT_MAX_BYTES } from "./herdr-viewer-render.mjs";
+import type { SlotIdentity, ViewerIdentity, ViewerSnapshot } from "./mux-core.ts";
+import { SNAPSHOT_MAX_BYTES } from "./mux-viewer-render.mjs";
 
 export type SnapshotFsDeps = { fs?: Pick<typeof import("node:fs/promises"), "mkdtemp" | "chmod" | "writeFile" | "rename" | "rm" | "readFile">; tempRoot?: string };
 export interface SnapshotStore {

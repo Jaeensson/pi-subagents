@@ -4,10 +4,10 @@ import { access, constants } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { attemptKey, chooseSlot, projectSnapshot, type PaneRef, type SlotIdentity, type SlotState, type ViewerIdentity } from "./herdr-core.ts";
+import { attemptKey, chooseSlot, projectSnapshot, type PaneRef, type SlotIdentity, type SlotState, type ViewerIdentity } from "./mux-core.ts";
 import { buildViewerCommand, classifyOccupant, type HerdrAdapter, type ProcessInfo } from "./herdr-adapter.ts";
-import { createSnapshotStore, type SnapshotStore } from "./herdr-files.ts";
-import { nodeMonitorClock, type MonitorClock, type ViewerHost, type ViewerManager } from "./herdr-monitor.ts";
+import { createSnapshotStore, type SnapshotStore } from "./mux-files.ts";
+import { nodeMonitorClock, type MonitorClock, type ViewerHost, type ViewerManager } from "./mux-monitor.ts";
 import type { Task } from "./runtime.ts";
 
 export interface ViewerManagerDeps {
@@ -60,7 +60,7 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
   const deps: ViewerManagerDeps = {
     storeFactory: createSnapshotStore,
     resolveNode: () => resolveViewerNode(execPath, process.env, process.platform),
-    viewerScriptPath: fileURLToPath(new URL("./herdr-viewer.mjs", import.meta.url)),
+    viewerScriptPath: fileURLToPath(new URL("./mux-viewer.mjs", import.meta.url)),
     nonce: randomUUID, clock: nodeMonitorClock, execPath, ...supplied,
   };
   const clock = deps.clock;

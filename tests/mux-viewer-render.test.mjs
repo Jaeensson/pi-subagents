@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   sanitizeText, parseSnapshot, renderViewer, formatTokens, formatDuration, SNAPSHOT_VERSION, SNAPSHOT_MAX_BYTES,
   PUBLISH_INTERVAL_MS, VIEWER_POLL_MS, HEARTBEAT_INTERVAL_MS, DISCONNECTED_AFTER_MS, EXIT_AFTER_MS,
-} from "../herdr-viewer-render.mjs";
+} from "../mux-viewer-render.mjs";
 
 test("sanitizes OSC, CSI and terminal controls and validates protocol snapshots", () => {
   assert.equal(sanitizeText("safe\x1b]52;c;bad\x07\x1b[31mred"), "safered");
