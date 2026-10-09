@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { formatSummary, summarizeTasks, type MuxContext, type PaneRef } from "./mux-core.ts";
 import type { detectMux } from "./mux-detection.ts";
 import type { ApiResult, MuxAdapter } from "./mux-adapter.ts";
-import type { HerdrOptions } from "./herdr-settings.ts";
+import type { MuxOptions, MuxSettings } from "./mux-settings.ts";
 import type { RuntimeObservation, Task, subscribeRuntimeObservations } from "./runtime.ts";
 
 export interface MonitorClock {
@@ -40,8 +40,8 @@ export interface MonitorDeps {
   viewerFactory?: (host: ViewerHost) => ViewerManager;
 }
 export interface HerdrMonitor {
-  start(sessionId: string, cwd: string, options: HerdrOptions): void;
-  applyOptions(options: HerdrOptions): void;
+  start(sessionId: string, cwd: string, settings: MuxSettings): void;
+  applyOptions(settings: MuxSettings): void;
   stop(): Promise<void> | undefined;
 }
 
@@ -60,6 +60,10 @@ function metadataSource(sessionId: string): string {
 }
 const sameContext = (a: MuxContext, b: MuxContext): boolean =>
   a.backend === b.backend && a.binary === b.binary && a.endpoint === b.endpoint && a.callerPaneId === b.callerPaneId;
+const cloneSettings = (settings: MuxSettings): MuxSettings => ({
+  herdr: { ...settings.herdr },
+  tmux: { ...settings.tmux },
+});
 const stripTerminalControls = (value: string): string => value
   .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g, "")
   .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
@@ -69,7 +73,7 @@ const displayJobId = (id: string): string => stripTerminalControls(id).trim().sl
 
 export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
   const { clock } = deps;
-  let binding: { sessionId: string; cwd: string; options: HerdrOptions } | undefined;
+  let binding: { sessionId: string; cwd: string; settings: MuxSettings } | undefined;
   let cached: { context: MuxContext; adapter: MuxAdapter } | undefined;
   let active: Activation | undefined;
   // One counter for the controller, including cleanup. Never reset on toggles.
@@ -199,10 +203,12 @@ export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
     });
   }
   function activate(): void {
-    if (!binding?.options.enabled) return;
+    if (!binding) return;
     const detected = deps.detect(deps.env);
     if (!detected) return;
     const { context } = detected;
+    const options: MuxOptions = binding.settings[context.backend];
+    if (!options.enabled) return;
     const seed = clock.wallNow();
     if (Number.isFinite(seed)) sequence = sequence > BigInt(Math.max(0, Math.floor(seed))) * 1000n
       ? sequence : BigInt(Math.max(0, Math.floor(seed))) * 1000n;
@@ -214,7 +220,7 @@ export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
     }
     const a: Activation = {
       id: randomUUID(), source: metadataSource(binding.sessionId), cwd: binding.cwd, context,
-      viewers: binding.options.viewers, raw: cached.adapter, api: cached.adapter,
+      viewers: options.viewers, raw: cached.adapter, api: cached.adapter,
       isCurrent: () => active === a, warned: false, busy: false, dirty: false, startupFailed: false,
       targets: new Set(), notified: new Set(), viewerAttempted: false,
     };
@@ -225,15 +231,19 @@ export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
     request(a, true);
   }
   return {
-    start(sessionId, cwd, options) {
+    start(sessionId, cwd, settings) {
       void stop();
-      binding = { sessionId, cwd, options: { ...options } };
+      binding = { sessionId, cwd, settings: cloneSettings(settings) };
       activate();
     },
-    applyOptions(options) {
-      if (!binding || (binding.options.enabled === options.enabled && binding.options.viewers === options.viewers)) return;
+    applyOptions(settings) {
+      if (!binding) return;
+      const detected = deps.detect(deps.env);
+      const current = detected ? binding.settings[detected.context.backend] : undefined;
+      const next = detected ? settings[detected.context.backend] : undefined;
+      if (current && next && current.enabled === next.enabled && current.viewers === next.viewers) return;
       void stop();
-      binding.options = { ...options };
+      binding.settings = cloneSettings(settings);
       activate();
     },
     stop,

@@ -35,7 +35,7 @@ import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { createHerdrAdapter } from "./herdr-adapter.ts";
 import { detectMux } from "./mux-detection.ts";
 import { createHerdrMonitor, nodeMonitorClock, type HerdrMonitor } from "./mux-monitor.ts";
-import { readHerdrOptions } from "./herdr-settings.ts";
+import { readMuxSettings } from "./mux-settings.ts";
 import { createViewerManager } from "./mux-viewers.ts";
 import { beginTaskShutdown, markInterruptedSweep, resumeTaskSpawning, shutdownTaskProcesses } from "./process.ts";
 import { seedBundledAgents } from "./agents.ts";
@@ -167,11 +167,11 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 		}
 		if (startupGeneration === monitorStartupGeneration) {
 			try {
-				const options = readHerdrOptions(path.join(getAgentDir(), "settings.json"));
+				const muxSettings = readMuxSettings(path.join(getAgentDir(), "settings.json"));
 				// Commit the supplier with the synchronous activation, after recovery.
 				// Pending work from the old activation keeps its old session until now.
 				boundSessionId = psid || undefined;
-				if (psid) monitor?.start(psid, ctx.cwd, options);
+				if (psid) monitor?.start(psid, ctx.cwd, muxSettings);
 				else void stopMonitor();
 			} catch (error) {
 				// Retain the controller even if start allocated resources before throwing.
@@ -221,9 +221,9 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 	pi.registerTool(subagentAgentsTool);
 	pi.registerTool(subagentPauseTool);
 	pi.registerTool(subagentResumeTool);
-	registerSubagentsCommand(pi, (next) => {
+	registerSubagentsCommand(pi, () => {
 		if (boundSessionId === undefined) return;
-		try { monitor?.applyOptions(next); }
+		try { monitor?.applyOptions(readMuxSettings(path.join(getAgentDir(), "settings.json"))); }
 		catch { warn("Herdr monitoring unavailable: option change failed"); }
 	});
 }

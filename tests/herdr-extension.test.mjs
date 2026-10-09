@@ -419,7 +419,7 @@ test("entry settings callback closes real viewer pool while central monitoring a
     component.handleInput(" "); component.handleInput("\x1b"); await dialog; await flush();
     const saved = JSON.parse(readFileSync(settingsPath, "utf8"));
     assert.deepEqual(saved.subagent.herdr, { enabled: true, viewers: false });
-    assert.deepEqual(h.applied, [{ enabled: true, viewers: false }], "entry applies the successfully saved options exactly once");
+    assert.deepEqual(h.applied, [{ herdr: { enabled: true, viewers: false }, tmux: { enabled: true, viewers: true } }], "entry applies the successfully saved options exactly once");
     assert.equal(h.calls.filter(c => c[0] === "pane" && c[1] === "close").length, 1, "viewer cleanup reached owned pane");
     assert.equal(h.disposed, 1, "viewer transport disposed");
     assert.equal(f.task.status, "running"); assert.equal(f.child.exitCode, null);

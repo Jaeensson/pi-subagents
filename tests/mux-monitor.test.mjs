@@ -6,9 +6,10 @@ import { detectMux } from "../mux-detection.ts";
 import { checkJobComplete, emptyUsage, setMessageSender, subscribeRuntimeObservations } from "../runtime.ts";
 import { emptyLiveTrace } from "../live.ts";
 
-const enabled = { enabled: true, viewers: true };
-const metadataOnly = { enabled: true, viewers: false };
-const disabled = { enabled: false, viewers: false };
+const settings = options => ({ herdr: { ...options }, tmux: { ...options } });
+const enabled = settings({ enabled: true, viewers: true });
+const metadataOnly = settings({ enabled: true, viewers: false });
+const disabled = settings({ enabled: false, viewers: false });
 const env = { HERDR_ENV: "1", HERDR_PANE_ID: "original", HERDR_SOCKET_PATH: "/socket", HERDR_BIN_PATH: "/herdr" };
 const ok = (value = {}) => JSON.stringify({ id: "cli:test", result: { type: "ok", ...value } });
 const pane = id => ok({ pane: { pane_id: id, tab_id: "tab", workspace_id: "workspace" } });

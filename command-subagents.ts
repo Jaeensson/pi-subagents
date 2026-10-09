@@ -15,9 +15,9 @@
  * Every change is applied through core.ts's applyTierConfigChange and
  * persisted immediately via jobs.ts's writeModelTiers (settings.json is
  * re-read per subagent tool call, so changes take effect at once). Herdr switches
- * persist independently via herdr-settings.ts before notifying the entry controller.
+ * persist independently via mux-settings.ts before notifying the entry controller.
  *
- * Depends on core.ts (pure), jobs.ts and herdr-settings.ts (settings IO), not monitoring.
+ * Depends on core.ts (pure), jobs.ts and mux-settings.ts (settings IO), not monitoring.
  */
 
 import path from "node:path";
@@ -53,7 +53,7 @@ import {
 	type TierLevel,
 } from "./core.ts";
 import { buildModelContext, writeModelTiers } from "./jobs.ts";
-import { readHerdrOptions, writeHerdrOptions, type HerdrOptions } from "./herdr-settings.ts";
+import { readMuxSettings, writeMuxOptions, type MuxOptions } from "./mux-settings.ts";
 
 // ── Applying changes ─────────────────────────────────────────────────────────
 
@@ -196,12 +196,12 @@ const HERDR_VIEWERS_ID = "herdr-viewers";
 const MENU_VISIBLE_ROWS = 10;
 const isTierId = (id: string): id is TierLevel => (TIER_LEVELS as readonly string[]).includes(id);
 
-async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (next: HerdrOptions) => void): Promise<void> {
+async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (next: MuxOptions) => void): Promise<void> {
 	const ui = ctx.ui;
 	const modelContext = buildModelContext(ctx);
 	let config = modelContext.tierConfig;
 	const settingsPath = path.join(getAgentDir(), "settings.json");
-	let herdr = readHerdrOptions(settingsPath);
+	let herdr = readMuxSettings(settingsPath).herdr;
 	const options = catalogOptions(ctx);
 
 	const explicitTiers = () => TIER_LEVELS.filter((l) => config?.[l]).map((l) => `${l}: ${config?.[l]}`);
@@ -297,7 +297,7 @@ async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (n
 			return new SettingsList(items, MENU_VISIBLE_ROWS, getSettingsListTheme(), (id, value) => {
 				if (id === HERDR_ENABLED_ID || id === HERDR_VIEWERS_ID) {
 					const next = { ...herdr, [id === HERDR_ENABLED_ID ? "enabled" : "viewers"]: value === "on" };
-					const result = writeHerdrOptions(settingsPath, next);
+					const result = writeMuxOptions(settingsPath, "herdr", next);
 					if (!result.ok) {
 						ui.notify(`Could not save settings: ${result.error}`, "error");
 						// SettingsList mutates its row before calling us; restore active values.
@@ -387,7 +387,7 @@ async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (n
 // ── Registration ─────────────────────────────────────────────────────────────
 
 /** Register the `/subagents` settings command. */
-export function registerSubagentsCommand(pi: ExtensionAPI, onHerdrOptionsChange?: (next: HerdrOptions) => void): void {
+export function registerSubagentsCommand(pi: ExtensionAPI, onHerdrOptionsChange?: (next: MuxOptions) => void): void {
 	pi.registerCommand("subagents", {
 		description: "Subagent settings (model tiers + Herdr monitoring and viewers)",
 		handler: async (_args, ctx) => {
