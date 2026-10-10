@@ -33,16 +33,34 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
     result builders, model-tier context
   - `tui.ts` — TUI rendering helpers + persistent status widget
   - `command-subagents.ts` — `/subagents` settings dialog: auto-tier toggle,
-    per-tier model pickers, and Herdr monitoring/viewer switches; model tiers
-    persist via `writeModelTiers` and Herdr options via `herdr-settings.ts`
-  - `herdr-settings.ts` — pure normalization and persistence of Herdr options
-  - `herdr-monitor.ts` — session-bound metadata reporting and viewer lifecycle
-  - `herdr-viewers.ts` — owned viewer-pane pool and snapshot lifecycle
-  - `index.ts` constructs one idle, extension-scoped Herdr controller; each
-    `session_start` updates its mutable session binding and starts it after durable
-    recovery, before the non-TUI return. Suppliers filter by owning job session.
-    Failed starts promptly stop the retained controller. Shutdown closes the spawn
-    gate, immediately handles monitor-stop rejection, then durably interrupts and
+    per-tier model pickers, and Herdr/tmux monitoring/viewer switches; model
+    tiers persist via `writeModelTiers` and mux options via `mux-settings.ts`
+  - `mux-core.ts` — shared multiplexer types (`MuxContext`/`PaneRef`/slot
+    state) and task-summary/snapshot projection helpers
+  - `mux-adapter.ts` — shared `MuxAdapter` interface, bounded command queue, and
+    viewer-occupant classification
+  - `mux-detection.ts` — backend detection precedence: `PI_SUBAGENT_MUX`
+    override → Herdr → tmux
+  - `mux-settings.ts` — pure normalization and persistence of the per-backend
+    `subagent.herdr` / `subagent.tmux` options
+  - `mux-monitor.ts` — session-bound metadata reporting and viewer lifecycle,
+    plus `MonitorClock`/`nodeMonitorClock`
+  - `mux-viewers.ts` — owned viewer-pane pool and snapshot lifecycle (uses
+    `mux-files.ts` for private transports)
+  - `mux-files.ts` — private snapshot/identity files with atomic writes
+  - `herdr-adapter.ts` — Herdr protocol and CLI adaptation, plus the shared
+    `buildViewerCommand`
+  - `tmux-adapter.ts` — tmux protocol/CLI adaptation, window-scoped chrome,
+    `escapeFormatValue`, and the lazy 3.2 version guard
+  - `mux-viewer-render.d.mts`, `mux-viewer-render.mjs`, `mux-viewer.d.mts`, and
+    `mux-viewer.mjs` — standalone snapshot renderer and viewer process
+  - `index.ts` constructs one idle, extension-scoped mux controller through
+    `createMuxMonitor`; each `session_start` updates its mutable session
+    binding and starts it after durable recovery, before the non-TUI return.
+    Suppliers filter by owning job session. Adapter selection goes through
+    `detectMux` plus `createHerdrAdapter`/`createTmuxAdapter`. Failed starts
+    promptly stop the retained controller. Shutdown closes the spawn gate,
+    immediately handles monitor-stop rejection, then durably interrupts and
     reaps children before a promise-only two-second final cleanup guard.
   - `watch-render.ts` — markdown-aware trace→lines rendering for the watch
     pane: sealed + pending text/thinking through pi's native Markdown +
@@ -51,14 +69,19 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   - `watch.ts` — keybind-toggled watch pane: overlay component, keys, ticker,
     renderer latching (depends on runtime + watch-render + live + core + tui;
     never on process/jobs)
-  - `herdr-core.ts`, `herdr-adapter.ts`, `herdr-files.ts`,
-    `herdr-viewer-render.d.mts`, and `herdr-viewer.mjs` own Herdr protocols,
-    CLI adaptation, private snapshot files, and the standalone viewer
   - `tools/*.ts` — one file per registered tool (`defineTool`)
 - Keep the dependency graph acyclic: core → store → runtime → process → jobs
   → tools; live is a leaf (runtime imports it type-only, jobs imports
   emptyLiveTrace); tui depends on runtime + core; watch-render depends on
   live; watch depends on runtime + watch-render + live + core + tui.
+  Multiplexer modules: mux-core is a leaf (plus mux-viewer-render.mjs);
+  mux-adapter depends on mux-core; herdr-adapter and tmux-adapter depend on
+  mux-core + mux-adapter; mux-files depends on mux-core; mux-settings depends
+  on mux-adapter (type); mux-monitor depends on mux-core + mux-adapter +
+  mux-detection (type) + mux-settings (type) + runtime (type); mux-viewers
+  depends on mux-core + mux-adapter + mux-files + mux-monitor + herdr-adapter
+  (shared viewer command); mux-detection depends on both adapters + mux-core;
+  index wires the adapters, detection, monitor, settings, and viewers.
 - `agents.ts` discovers agent definitions from `~/.pi/agent/agents/*.md` and seeds the bundled defaults (`agents/*.md`: scout, researcher, worker, reviewer) into that directory on load when missing.
 - Agent files: YAML frontmatter (`name`, `description` required; `tools`,
   `tier`, `extensions` optional) + markdown system prompt body. `tier` is

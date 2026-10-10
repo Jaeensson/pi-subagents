@@ -226,6 +226,79 @@ normal pi status/watch UI and tool results. Spawning, model selection,
 completion delivery, durable jobs, and pause/resume remain authoritative and
 unchanged; the optional monitor must not block child work.
 
+## Optional tmux monitoring
+
+When pi runs inside a tmux pane, subagents can report display-only activity
+metadata and open a **Subagents** window with up to four read-only viewer panes.
+The compatibility floor is **tmux 3.2**: the version guard runs before any
+window, option, or pane command, so older builds are left alone. Outside tmux,
+this integration is inactive: no tmux commands, viewer processes, monitoring
+files, or timers.
+
+Both settings default to `true` in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "subagent": {
+    "tmux": {
+      "enabled": true,
+      "viewers": true
+    }
+  }
+}
+```
+
+Use `/subagents` to change **tmux monitoring** or **tmux viewers**
+immediately. Manual settings-file edits require `/reload`. Setting `viewers`
+to `false` closes owned viewers but keeps central activity metadata enabled;
+setting `enabled` to `false` also clears the integration's metadata. Neither
+switch stops running children. When both Herdr and tmux contexts are present,
+Herdr wins; `PI_SUBAGENT_MUX` can force one backend.
+
+The integration never writes a global tmux option. Its owned window sets
+`pane-border-status`, `pane-border-format`, and `automatic-rename`, and its
+viewer panes carry `@pi_viewer_state` and `@pi_viewer_summary`; the parent pane
+and window receive only the integration's own user options
+(`@pi_subagent_summary`, `@pi_subagents`). Every value written to a tmux user
+option passes through a format-escaping guard, because tmux recursively expands
+user-option values referenced from a format — without it, a task label
+containing `#{...}` or `#(...)` would execute a tmux format command. Live labels
+and aggregate counts are the only data written; transcripts are not.
+
+Viewer panes show sanitized text, thinking, and tool activity under a heading
+(named task · agent · status) and a second line with the model, context usage
+(context tokens/window and percentage when known), and elapsed runtime; unknown
+fields are omitted and runtime freezes when the task finishes. Completed output
+stays visible until that pane is reused; executing tasks are never evicted.
+Panes open without stealing focus and are **not** execution backends or
+interactive child pi sessions. Display labels and activity counts do not change
+the parent's semantic agent state, native session identity, or resume behavior.
+A viewer shows disconnected after ten seconds without a producer heartbeat and
+exits after thirty seconds. Live snapshots are bounded previews, not full
+transcripts or output artifacts.
+
+Missing tmux/Node, unsupported shells, or monitoring failures fall back to the
+normal pi status/watch UI and tool results. Spawning, model selection,
+completion delivery, durable jobs, and pause/resume remain authoritative and
+unchanged; the optional monitor must not block child work.
+
+### Rendering the parent summary (opt-in)
+
+The integration only reads and writes its own options; it never changes your
+status line. To surface the aggregate summary on the parent side, reference the
+option it sets from your own `~/.tmux.conf`:
+
+```tmux
+# Show the subagent summary on the parent window's border when present.
+set -g pane-border-status top
+set -g pane-border-format " #{?@pi_subagents,#{@pi_subagents},#{pane_title}} "
+```
+
+The window-scoped `@pi_subagents` value (and the pane-scoped
+`@pi_subagent_summary`) refreshes while tasks run and is cleared on session
+shutdown. This snippet is entirely optional and independent of the owned
+**Subagents** window.
+
 ## How it works
 
 Children run `pi --mode json -p` with `--no-extensions --no-skills
@@ -270,3 +343,23 @@ nonzero. Requires an installed Herdr CLI and `/bin/sh`; allow about a minute.
 Treat live verification as platform-specific: the compatibility baseline is not
 a claim that every OS or shell has been tested. Windows/PowerShell/cmd and other
 shells need their own isolated live verification before claiming support there.
+
+### Opt-in tmux smoke verification (source checkout only)
+
+```bash
+node scripts/tmux-monitor-smoke.mjs
+```
+
+This developer script is not packed with the extension. It creates one uniquely
+named disposable tmux server (`tmux -L pi-smoke-<32hex>`) with a private
+temporary HOME, agent directory, and socket directory, runs the driver in a pane
+of that server, independently asserts the real **Subagents** window, its four
+viewer panes, the window-scoped options (`pane-border-status`,
+`pane-border-format`, `automatic-rename`) and the `@pi_viewer_state` /
+`@pi_viewer_summary` pane options, then kills the server — even on failure. It
+never reads or mutates your ambient `$TMUX`/`-S` server. Fake JSON children
+exercise the real extension hooks and parsing without provider calls or
+recursive agents. Every tmux invocation is bounded and the whole run has a
+90-second deadline. Successful output is the JSON list of checks; failures exit
+nonzero with the last observed pane state. Requires an installed tmux 3.2+;
+`npm test` uses injected ports and never creates a live tmux server.
