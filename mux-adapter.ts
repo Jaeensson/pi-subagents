@@ -53,7 +53,7 @@ export function createCommandQueue(limit = 4, capacity = 32): CommandQueue {
         if (item.key !== undefined) keys.add(item.key);
       }
     }
-    if (queue.length + work.length - immediate > capacity) throw Object.assign(new Error("Herdr command queue is full"), { unavailable: true });
+    if (queue.length + work.length - immediate > capacity) throw Object.assign(new Error("Multiplexer command queue is full"), { unavailable: true });
     const pending = work.map(fn => new Promise<T>((resolve, reject) => {
       queue.push({ key, stale, reject, run: () => {
         Promise.resolve().then(fn).then(resolve, reject).finally(() => {

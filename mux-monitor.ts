@@ -68,7 +68,7 @@ const stripTerminalControls = (value: string): string => value
   .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g, "")
   .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
   .replace(/[\x00-\x1F\x7F-\x9F]/g, "");
-const displayWarning = (message: string): string => stripTerminalControls(`Herdr monitoring unavailable: ${message}`).slice(0, 80);
+const displayWarning = (message: string): string => stripTerminalControls(`Multiplexer monitoring unavailable: ${message}`).slice(0, 80);
 const displayJobId = (id: string): string => stripTerminalControls(id).trim().slice(0, 48) || "unknown";
 
 export function createMuxMonitor(deps: MonitorDeps): MuxMonitor {

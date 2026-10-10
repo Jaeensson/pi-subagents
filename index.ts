@@ -92,12 +92,12 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 			viewerFactory: createViewerManager,
 			warn,
 		});
-	} catch { warn("Herdr monitoring unavailable: controller creation failed"); }
+	} catch { warn("Multiplexer monitoring unavailable: controller creation failed"); }
 	const stopMonitor = (): Promise<void> | undefined => {
 		try {
 			// Attach rejection handling NOW, not after durable writes or child reaping.
-			return monitor?.stop()?.catch(() => { warn("Herdr monitoring cleanup failed"); });
-		} catch { warn("Herdr monitoring cleanup failed"); }
+			return monitor?.stop()?.catch(() => { warn("Multiplexer monitoring cleanup failed"); });
+		} catch { warn("Multiplexer monitoring cleanup failed"); }
 	};
 	// Completion notifications go out as custom messages (rendered as a
 	// "finished" card, not a "Steering: ..." user message) but keep the
@@ -177,7 +177,7 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 			} catch (error) {
 				// Retain the controller even if start allocated resources before throwing.
 				void stopMonitor();
-				warn(`Herdr monitoring unavailable: ${error instanceof Error ? error.message : "start failed"}`);
+				warn(`Multiplexer monitoring unavailable: ${error instanceof Error ? error.message : "start failed"}`);
 			}
 		}
 		if (!ctx.hasUI) return;
@@ -225,6 +225,6 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 	registerSubagentsCommand(pi, () => {
 		if (boundSessionId === undefined) return;
 		try { monitor?.applyOptions(readMuxSettings(path.join(getAgentDir(), "settings.json"))); }
-		catch { warn("Herdr monitoring unavailable: option change failed"); }
+		catch { warn("Multiplexer monitoring unavailable: option change failed"); }
 	});
 }
