@@ -312,7 +312,7 @@ test("production default-on outside Herdr creates no CLI calls, viewer files, or
   writeFileSync(path.join(bin, "herdr"), `#!/bin/sh\nprintf invoked >> '${log}'\nexit 1\n`, { mode: 0o755 });
   const previousPath = process.env.PATH;
   process.env.PATH = `${bin}${path.delimiter}${previousPath}`;
-  const directories = () => readdirSync(os.tmpdir()).filter(n => n.startsWith("pi-herdr-viewer-"));
+  const directories = () => readdirSync(os.tmpdir()).filter(n => n.startsWith("pi-mux-viewer-"));
   const before = directories(), timers = [];
   const oldTimeout = globalThis.setTimeout, oldInterval = globalThis.setInterval;
   globalThis.setTimeout = (...args) => { timers.push(args[1]); return oldTimeout(...args); };

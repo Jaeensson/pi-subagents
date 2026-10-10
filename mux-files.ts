@@ -23,7 +23,7 @@ export function createSnapshotStore(deps: SnapshotFsDeps = {}): SnapshotStore {
   const slots = new Map<number, Slot>();
   const writes = new Set<Promise<void>>();
   const directory = () => directoryPromise ??= (async () => {
-    const dir = await fs.mkdtemp(path.join(root, "pi-herdr-viewer-"));
+    const dir = await fs.mkdtemp(path.join(root, "pi-mux-viewer-"));
     try {
       await fs.chmod(dir, 0o700);
       return dir;
