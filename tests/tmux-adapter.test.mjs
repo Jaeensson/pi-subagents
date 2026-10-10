@@ -341,11 +341,10 @@ test("createTab scopes border chrome and disables automatic rename", async () =>
   const calls = [];
   const adapter = withVersion(calls, "@7 %8");
   await adapter.createTab("$0", "/work");
-  const argv = calls.map(c => c.join(" "));
-  assert.ok(argv.some(a => a.includes("set-option -w -t @7 pane-border-status top")));
-  assert.ok(argv.some(a => a.includes("set-option -w -t @7 pane-border-format  #{@pi_viewer_summary} ")));
-  assert.ok(argv.some(a => a.includes("set-option -w -t @7 automatic-rename off")));
-  assert.ok(!argv.some(a => a.includes("set-option -g")), "chrome must never mutate global options");
+  assert.deepEqual(calls[1], ["-S", "/tmp/t", "set-option", "-w", "-t", "@7", "pane-border-status", "top"]);
+  assert.deepEqual(calls[2], ["-S", "/tmp/t", "set-option", "-w", "-t", "@7", "pane-border-format", " #{@pi_viewer_summary} "]);
+  assert.deepEqual(calls[3], ["-S", "/tmp/t", "set-option", "-w", "-t", "@7", "automatic-rename", "off"]);
+  assert.ok(!calls.map(c => c.join(" ")).some(a => a.includes("set-option -g")), "chrome must never mutate global options");
 });
 
 // Resolves the parent caller pane to %1/@4 while answering new-window with the
@@ -398,6 +397,13 @@ test("an empty or whitespace summary keeps the plain window name", () => {
   assert.equal(boundedWindowName(""), "Subagents");
   assert.equal(boundedWindowName("   "), "Subagents");
   assert.equal(boundedWindowName("\u001b\u0007"), "Subagents");
+});
+
+test("a bounded name never keeps an odd trailing hash run", () => {
+  const name = boundedWindowName("x".repeat(25) + "###");
+  assert.ok(name.startsWith("Subagents · "), `unexpected name ${name}`);
+  const trailing = /#+$/.exec(name)?.[0] ?? "";
+  assert.equal(trailing.length % 2, 0, `odd trailing hash run in ${name}`);
 });
 
 test("metadata with a whitespace summary renames the owned window to exactly Subagents", async () => {

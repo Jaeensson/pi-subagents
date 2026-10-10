@@ -58,7 +58,7 @@ export function boundedWindowName(summary: string): string {
   if (escaped.trim() === "") return PARENT_WINDOW_NAME;
   const budget = OWNED_WINDOW_MAX - OWNED_WINDOW_PREFIX.length;
   let body = escaped.slice(0, budget);
-  if (body.endsWith("#") && !body.endsWith("##")) body = body.slice(0, -1);
+  body = body.replace(/#+$/, run => (run.length % 2 ? run.slice(0, -1) : run));
   return `${OWNED_WINDOW_PREFIX}${body}`;
 }
 
