@@ -182,7 +182,7 @@ test("a ttl timer unsets the summary and the window aggregate when it fires", as
   assert.ok(argv.includes("-S /tmp/t set-option -wu -t @4 @pi_subagents"));
 });
 
-test("a ttl expiry renames the owned window back to Subagents", async () => {
+test("a ttl expiry renames the owned window back to π subagents", async () => {
   const calls = [];
   const { clock, scheduled } = recordingClock();
   const adapter = createTmuxAdapter(context, async (_binary, args) => {
@@ -201,7 +201,7 @@ test("a ttl expiry renames the owned window back to Subagents", async () => {
   const argv = calls.map(c => c.join(" "));
   assert.ok(argv.includes("-S /tmp/t set-option -pu -t %1 @pi_subagent_summary"));
   assert.ok(argv.includes("-S /tmp/t set-option -wu -t @4 @pi_subagents"));
-  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 Subagents"), "restores the owned window title");
+  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 π subagents"), "restores the owned window title");
 });
 
 test("a ttl expiry after closeTab does not rename the released window", async () => {
@@ -334,7 +334,7 @@ test("createTab creates a detached window and reports its root pane", async () =
   const adapter = withVersion(calls, "@7 %8");
   const result = await adapter.createTab("$0", "/work");
   assert.deepEqual(result.value, { tabId: "@7", rootPane: { paneId: "%8", tabId: "@7", workspaceId: "$0" } });
-  assert.deepEqual(calls[0], ["-S", "/tmp/t", "new-window", "-d", "-t", "$0:", "-c", "/work", "-n", "Subagents", "-P", "-F", "#{window_id} #{pane_id}"]);
+  assert.deepEqual(calls[0], ["-S", "/tmp/t", "new-window", "-d", "-t", "$0:", "-c", "/work", "-n", "π subagents", "-P", "-F", "#{window_id} #{pane_id}"]);
 });
 
 test("createTab scopes border chrome and disables automatic rename", async () => {
@@ -364,10 +364,10 @@ test("metadata renames the owned window to the escaped aggregate summary", async
   calls.length = 0;
   await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "2 running" } });
   const argv = calls.map(c => c.join(" "));
-  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 Subagents · 2 running"), "renames the owned window, not the parent's @4");
+  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 π subagents · 2 running"), "renames the owned window, not the parent's @4");
 });
 
-test("clearing the summary renames the owned window back to Subagents", async () => {
+test("clearing the summary renames the owned window back to π subagents", async () => {
   const calls = [];
   const adapter = withOwnedWindow(calls);
   await adapter.createTab("$0", "/work");
@@ -375,7 +375,7 @@ test("clearing the summary renames the owned window back to Subagents", async ()
   calls.length = 0;
   await adapter.metadata("%1", { source: "s", seq: "2", tokens: { subagent_summary: null } });
   const argv = calls.map(c => c.join(" "));
-  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 Subagents"), "restores the plain window name");
+  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 π subagents"), "restores the plain window name");
 });
 
 test("the owned window name is escaped and bounded without a dangling hash", async () => {
@@ -387,33 +387,33 @@ test("the owned window name is escaped and bounded without a dangling hash", asy
   const rename = calls.map(c => c.join(" ")).find(a => a.includes("rename-window"));
   assert.ok(rename, "renames the owned window");
   const name = rename.split("rename-window -t @7 ")[1];
-  assert.ok(name.startsWith("Subagents · "), `unexpected name ${name}`);
+  assert.ok(name.startsWith("π subagents · "), `unexpected name ${name}`);
   assert.ok(name.length <= 40, `name is bounded, got ${name.length}`);
   assert.ok(name.includes("##(x)"), "escapes the hash before bounding");
   assert.equal((name.match(/#/g) ?? []).length % 2, 0, "never leaves half of an escaped hash");
 });
 
 test("an empty or whitespace summary keeps the plain window name", () => {
-  assert.equal(boundedWindowName(""), "Subagents");
-  assert.equal(boundedWindowName("   "), "Subagents");
-  assert.equal(boundedWindowName("\u001b\u0007"), "Subagents");
+  assert.equal(boundedWindowName(""), "π subagents");
+  assert.equal(boundedWindowName("   "), "π subagents");
+  assert.equal(boundedWindowName("\u001b\u0007"), "π subagents");
 });
 
 test("a bounded name never keeps an odd trailing hash run", () => {
   const name = boundedWindowName("x".repeat(25) + "###");
-  assert.ok(name.startsWith("Subagents · "), `unexpected name ${name}`);
+  assert.ok(name.startsWith("π subagents · "), `unexpected name ${name}`);
   const trailing = /#+$/.exec(name)?.[0] ?? "";
   assert.equal(trailing.length % 2, 0, `odd trailing hash run in ${name}`);
 });
 
-test("metadata with a whitespace summary renames the owned window to exactly Subagents", async () => {
+test("metadata with a whitespace summary renames the owned window to exactly π subagents", async () => {
   const calls = [];
   const adapter = withOwnedWindow(calls);
   await adapter.createTab("$0", "/work");
   calls.length = 0;
   await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "   " } });
   const argv = calls.map(c => c.join(" "));
-  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 Subagents"), "no trailing separator");
+  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 π subagents"), "no trailing separator");
 });
 
 test("a failed owned-window rename does not fail the metadata report", async () => {

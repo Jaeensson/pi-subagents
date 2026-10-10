@@ -6,6 +6,9 @@ export {
 } from "./mux-viewer-render.mjs";
 
 export type MuxBackend = "herdr" | "tmux";
+// Display label for the viewer container (Herdr tab / tmux window). Backends share
+// it so the two integrations never drift apart in the window list.
+export const VIEWER_CONTAINER_LABEL = "π subagents";
 export interface MuxContext { backend: MuxBackend; binary: string; endpoint: string; callerPaneId: string }
 export interface PaneRef { paneId: string; tabId: string; workspaceId: string }
 export interface SlotIdentity { activationId: string; slotId: number; nonce: string }

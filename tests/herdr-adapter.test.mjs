@@ -30,7 +30,7 @@ test("createTab passes the literal display label in exact external argv", async 
   const r = runner([ok({ tab: { tab_id: "t" }, root_pane: { pane_id: "p", tab_id: "t", workspace_id: "w" } })]);
   const api = createHerdrAdapter(context, r.exec);
   assert.equal((await api.createTab("w", "/work")).ok, true);
-  assert.deepEqual(r.calls[0].args, ["tab", "create", "--workspace", "w", "--cwd", "/work", "--no-focus", "--label", "Subagents"]);
+  assert.deepEqual(r.calls[0].args, ["tab", "create", "--workspace", "w", "--cwd", "/work", "--no-focus", "--label", "π subagents"]);
 });
 
 test("pane not found is missing, malformed creation is invalid, and tab creation avoids focus", async () => {

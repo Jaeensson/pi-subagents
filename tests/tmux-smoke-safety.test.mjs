@@ -65,7 +65,7 @@ async function fixture(t, { noBinary = false, driverFailure = false, changedName
       assert.fail(`unexpected display-message format ${format} for ${target}`);
     }
     if (command[0] === "capture-pane") return driverFailure ? "TMUX_SMOKE_FAILED:fixture failure\n" : `${OK_MARKER}\n`;
-    if (command[0] === "list-windows") return `@1 smoke\n@7 ${changedName ? "Renamed" : "Subagents · running 4 · queued 0"}\n`;
+    if (command[0] === "list-windows") return `@1 smoke\n@7 ${changedName ? "Renamed" : "π subagents · running 4 · queued 0"}\n`;
     if (command[0] === "list-panes") return "%1\n%2\n%3\n%4\n";
     if (command[0] === "show-options") {
       if (command.includes("pane-border-status")) return "top\n";
@@ -83,7 +83,7 @@ async function fixture(t, { noBinary = false, driverFailure = false, changedName
 
 // Break caught: inventing viewer panes or options without live evidence and
 // leaking them because a teardown guard is missing.
-test("successful launcher asserts the Subagents window and tears down its own server", async t => {
+test("successful launcher asserts the π subagents window and tears down its own server", async t => {
   const f = await fixture(t);
   const result = await f.run();
   assert.ok(result.includes("outside-gate"));
@@ -114,9 +114,9 @@ test("driver failure still tears down only the disposable server", async t => {
 });
 
 // Break caught: trusting an unrelated window as the integration's output.
-test("launcher rejects a missing Subagents window", async t => {
+test("launcher rejects a missing π subagents window", async t => {
   const f = await fixture(t, { changedName: true });
-  await assert.rejects(f.run(), /Subagents window/);
+  await assert.rejects(f.run(), /subagents window/i);
   assert.equal(f.killCalls.length, 1, "even a failed assertion still tears down");
   assert.deepEqual(await fs.readdir(f.root), []);
 });

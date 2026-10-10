@@ -102,7 +102,7 @@ export async function runSmokeDriver() {
     const out = await cli(["list-windows", "-a", "-F", "#{window_id} #{window_name}"]);
     return out.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean)
       .map(line => { const [id, ...name] = line.split(/\s+/); return { id, name: name.join(" ") }; })
-      .find(entry => entry.name === "Subagents" || entry.name.startsWith("Subagents · "));
+      .find(entry => entry.name === "π subagents" || entry.name.startsWith("π subagents · "));
   };
   try {
     await start();
@@ -142,7 +142,7 @@ export async function runSmokeDriver() {
       return running.length === 4 && running.every(task => task.status === "running" && !task.setupPending && task.dispatchState === "running");
     }, "four dispatched fixture tasks");
     await toggle(6); // enable tmux monitoring through the registered /subagents dialog
-    const owned = await until(window, "Subagents window");
+    const owned = await until(window, "π subagents window");
     const panes = await until(async () => {
       const ids = (await cli(["list-panes", "-t", owned.id, "-F", "#{pane_id}"])).trim().split(/\s+/).filter(Boolean);
       return ids.length === 4 ? ids : undefined;

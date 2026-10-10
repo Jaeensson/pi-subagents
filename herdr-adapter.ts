@@ -1,6 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { MuxContext, PaneRef, SlotIdentity } from "./mux-core.ts";
+import { VIEWER_CONTAINER_LABEL, type MuxContext, type PaneRef, type SlotIdentity } from "./mux-core.ts";
 import { createCommandQueue } from "./mux-adapter.ts";
 import type { ApiResult, MuxAdapter } from "./mux-adapter.ts";
 export { classifyOccupant } from "./mux-adapter.ts";
@@ -71,7 +71,7 @@ export function createHerdrAdapter(context: MuxContext, exec: HerdrExec = (binar
         const refs = r.panes.map((p: any) => { const ref = paneRef(p); if (!ref) throw new TypeError("invalid pane list entry"); return ref; });
         return refs.filter((p: PaneRef) => p.workspaceId === workspaceId);
       }),
-      createTab: (workspaceId, cwd) => wrap(async () => { const r = await invoke(["tab", "create", "--workspace", workspaceId, "--cwd", cwd, "--no-focus", "--label", "Subagents"]); const tab = r.tab, root = paneRef(r.root_pane); if (!text(tab?.tab_id) || !root || root.tabId !== tab.tab_id || root.workspaceId !== workspaceId) throw new TypeError("invalid tab creation response"); return { tabId: tab.tab_id, rootPane: root }; }),
+      createTab: (workspaceId, cwd) => wrap(async () => { const r = await invoke(["tab", "create", "--workspace", workspaceId, "--cwd", cwd, "--no-focus", "--label", VIEWER_CONTAINER_LABEL]); const tab = r.tab, root = paneRef(r.root_pane); if (!text(tab?.tab_id) || !root || root.tabId !== tab.tab_id || root.workspaceId !== workspaceId) throw new TypeError("invalid tab creation response"); return { tabId: tab.tab_id, rootPane: root }; }),
       splitPane: (id, direction, cwd) => wrap(async () => { const r = await invoke(["pane", "split", id, "--direction", direction, "--cwd", cwd, "--no-focus"]); const ref = paneRef(r.pane); if (!ref) throw new TypeError("invalid split response"); return ref; }),
       runViewer: (id, viewer) => action(["pane", "run", id, viewer.shellCommand]),
       metadata: async (id, patch) => {

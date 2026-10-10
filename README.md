@@ -186,7 +186,7 @@ per-tier models.
 ## Optional Herdr monitoring
 
 When pi runs inside a Herdr pane, subagents can report display-only activity
-metadata and open a **Subagents** tab with up to four read-only viewer panes.
+metadata and open a **π subagents** tab with up to four read-only viewer panes.
 Herdr 0.8.2 is the compatibility baseline. Outside Herdr, this integration is
 inactive: no Herdr commands, viewer processes, monitoring files, or timers.
 
@@ -229,7 +229,7 @@ unchanged; the optional monitor must not block child work.
 ## Optional tmux monitoring
 
 When pi runs inside a tmux pane, subagents can report display-only activity
-metadata and open a **Subagents** window with up to four read-only viewer panes.
+metadata and open a **π subagents** window with up to four read-only viewer panes.
 The compatibility floor is **tmux 3.2**: the version guard runs before any
 window, option, or pane command, so older builds are left alone. Outside tmux,
 this integration is inactive: no tmux commands, viewer processes, monitoring
@@ -297,7 +297,7 @@ set -g pane-border-format " #{?@pi_subagents,#{@pi_subagents},#{pane_title}} "
 The window-scoped `@pi_subagents` value (and the pane-scoped
 `@pi_subagent_summary`) refreshes while tasks run and is cleared on session
 shutdown. This snippet is entirely optional and independent of the owned
-**Subagents** window.
+**π subagents** window.
 
 ## How it works
 
@@ -353,7 +353,7 @@ node scripts/tmux-monitor-smoke.mjs
 This developer script is not packed with the extension. It creates one uniquely
 named disposable tmux server (`tmux -L pi-smoke-<32hex>`) with a private
 temporary HOME, agent directory, and socket directory, runs the driver in a pane
-of that server, independently asserts the real **Subagents** window, its four
+of that server, independently asserts the real **π subagents** window, its four
 viewer panes, the window-scoped options (`pane-border-status`,
 `pane-border-format`, `automatic-rename`) and the `@pi_viewer_state` /
 `@pi_viewer_summary` pane options, then kills the server — even on failure. It

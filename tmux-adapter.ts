@@ -1,6 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { MuxContext, PaneRef } from "./mux-core.ts";
+import { VIEWER_CONTAINER_LABEL, type MuxContext, type PaneRef } from "./mux-core.ts";
 import { createCommandQueue } from "./mux-adapter.ts";
 import type { ApiResult, MuxAdapter, ViewerLaunch } from "./mux-adapter.ts";
 
@@ -46,9 +46,9 @@ export function escapeFormatValue(value: string): string {
 // prefix, bounded so the tmux window list stays readable. Bounding the escaped
 // string can land between the two hashes of an escaped `#`, so drop a dangling
 // half before it renders as a broken format token.
-const OWNED_WINDOW_PREFIX = "Subagents · ";
+const OWNED_WINDOW_PREFIX = `${VIEWER_CONTAINER_LABEL} · `;
 const OWNED_WINDOW_MAX = 40;
-const PARENT_WINDOW_NAME = "Subagents";
+const PARENT_WINDOW_NAME = VIEWER_CONTAINER_LABEL;
 const BORDER_FORMAT = " #{@pi_viewer_summary} ";
 
 export function boundedWindowName(summary: string): string {
