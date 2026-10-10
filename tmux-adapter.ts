@@ -53,6 +53,9 @@ const BORDER_FORMAT = " #{@pi_viewer_summary} ";
 
 export function boundedWindowName(summary: string): string {
   const escaped = escapeFormatValue(summary);
+  // A blank summary has no body: keep the plain window name so the title never
+  // renders a dangling " · " separator.
+  if (escaped.trim() === "") return PARENT_WINDOW_NAME;
   const budget = OWNED_WINDOW_MAX - OWNED_WINDOW_PREFIX.length;
   let body = escaped.slice(0, budget);
   if (body.endsWith("#") && !body.endsWith("##")) body = body.slice(0, -1);
@@ -127,10 +130,16 @@ export function createTmuxAdapter(
   const scheduleTtl = (id: string, windowId: string | undefined, ttlMs: number): void => {
     cancelTtl(id);
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) return;
+    // Capture the window this report renamed so expiry only restores a title
+    // the adapter still owns; a later close/recreate must not be renamed.
+    const ownedAtSchedule = ownedWindowId;
     const handle = clock.setTimeout(() => {
       ttlTimers.delete(id);
       runRaw(["set-option", "-pu", "-t", id, "@pi_subagent_summary"], id);
       if (windowId !== undefined) runRaw(["set-option", "-wu", "-t", windowId, "@pi_subagents"], windowId);
+      if (ownedAtSchedule !== undefined && ownedWindowId === ownedAtSchedule) {
+        runRaw(["rename-window", "-t", ownedAtSchedule, PARENT_WINDOW_NAME], ownedAtSchedule);
+      }
     }, ttlMs);
     ttlTimers.set(id, handle);
   };

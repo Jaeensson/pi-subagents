@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getTmuxContext, parseTmuxVersion, createTmuxAdapter, escapeFormatValue } from "../tmux-adapter.ts";
+import { getTmuxContext, parseTmuxVersion, createTmuxAdapter, escapeFormatValue, boundedWindowName } from "../tmux-adapter.ts";
 
 const context = getTmuxContext({ TMUX: "/tmp/t,1,0", TMUX_PANE: "%1" });
 
@@ -182,6 +182,47 @@ test("a ttl timer unsets the summary and the window aggregate when it fires", as
   assert.ok(argv.includes("-S /tmp/t set-option -wu -t @4 @pi_subagents"));
 });
 
+test("a ttl expiry renames the owned window back to Subagents", async () => {
+  const calls = [];
+  const { clock, scheduled } = recordingClock();
+  const adapter = createTmuxAdapter(context, async (_binary, args) => {
+    if (args.includes("-V")) return "tmux 3.7c";
+    calls.push(args);
+    if (args.includes("new-window")) return "@7 %8";
+    if (args.includes("display-message")) return "%1 @4 $0";
+    return "";
+  }, clock);
+  await adapter.createTab("$0", "/work");
+  await adapter.metadata("%1", { source: "s", seq: "1", ttlMs: 5000, tokens: { subagent_summary: "2 running" } });
+  assert.equal(scheduled.size, 1);
+  calls.length = 0;
+  scheduled.values().next().value.fn();
+  await new Promise(resolve => setImmediate(resolve));
+  const argv = calls.map(c => c.join(" "));
+  assert.ok(argv.includes("-S /tmp/t set-option -pu -t %1 @pi_subagent_summary"));
+  assert.ok(argv.includes("-S /tmp/t set-option -wu -t @4 @pi_subagents"));
+  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 Subagents"), "restores the owned window title");
+});
+
+test("a ttl expiry after closeTab does not rename the released window", async () => {
+  const calls = [];
+  const { clock, scheduled } = recordingClock();
+  const adapter = createTmuxAdapter(context, async (_binary, args) => {
+    if (args.includes("-V")) return "tmux 3.7c";
+    calls.push(args);
+    if (args.includes("new-window")) return "@7 %8";
+    if (args.includes("display-message")) return "%1 @4 $0";
+    return "";
+  }, clock);
+  await adapter.createTab("$0", "/work");
+  await adapter.metadata("%1", { source: "s", seq: "1", ttlMs: 5000, tokens: { subagent_summary: "2 running" } });
+  await adapter.closeTab("@7");
+  calls.length = 0;
+  scheduled.values().next().value.fn();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(!calls.map(c => c.join(" ")).some(a => a.includes("rename-window")), "a released window must not be renamed");
+});
+
 test("metadata writes and clears per-state labels", async () => {
   const calls = [];
   const adapter = withVersion(calls, "");
@@ -351,6 +392,22 @@ test("the owned window name is escaped and bounded without a dangling hash", asy
   assert.ok(name.length <= 40, `name is bounded, got ${name.length}`);
   assert.ok(name.includes("##(x)"), "escapes the hash before bounding");
   assert.equal((name.match(/#/g) ?? []).length % 2, 0, "never leaves half of an escaped hash");
+});
+
+test("an empty or whitespace summary keeps the plain window name", () => {
+  assert.equal(boundedWindowName(""), "Subagents");
+  assert.equal(boundedWindowName("   "), "Subagents");
+  assert.equal(boundedWindowName("\u001b\u0007"), "Subagents");
+});
+
+test("metadata with a whitespace summary renames the owned window to exactly Subagents", async () => {
+  const calls = [];
+  const adapter = withOwnedWindow(calls);
+  await adapter.createTab("$0", "/work");
+  calls.length = 0;
+  await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "   " } });
+  const argv = calls.map(c => c.join(" "));
+  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 Subagents"), "no trailing separator");
 });
 
 test("a failed owned-window rename does not fail the metadata report", async () => {
