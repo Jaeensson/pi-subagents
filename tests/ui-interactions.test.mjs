@@ -7,7 +7,7 @@ import test from "node:test";
 const home = mkdtempSync(path.join(os.tmpdir(), "subagent-ui-"));
 process.env.HOME = home;
 process.env.PI_CODING_AGENT_DIR = path.join(home, ".pi", "agent");
-for (const key of ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_BIN_PATH"]) delete process.env[key];
+for (const key of ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_BIN_PATH", "TMUX", "TMUX_PANE", "PI_TMUX_BIN"]) delete process.env[key];
 mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
 writeFileSync(path.join(home, ".pi", "agent", "settings.json"), JSON.stringify({
   defaultModel: "sonnet",
@@ -175,6 +175,34 @@ test("failed viewer save preserves the displayed active preference and stored in
   assert.equal(readFileSync(settingsPath, "utf8"), "not json");
   h.done(true); await running;
   writeFileSync(settingsPath, original);
+});
+
+// Break caught: tmux rows missing, ordered before the Herdr rows, or a toggle rewriting a sibling key/backend.
+test("tmux rows follow the Herdr rows and each toggle persists only its own key", async () => {
+  const settingsPath = path.join(home, ".pi", "agent", "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({ subagent: {
+    modelTiers: { fast: "anthropic/haiku" },
+    herdr: { enabled: true, viewers: true, futureKey: "kept" },
+    tmux: { enabled: true, viewers: true },
+  } }));
+  const changes = [], h = commandHarness("tui", (next, backend) => changes.push([backend, next]));
+  const running = h.invoke(), component = h.component();
+  const down = () => component.handleInput("\x1b[B");
+  const render = () => component.render(100).join("\n");
+  for (let i = 0; i < 4; i++) down();
+  assert.match(render(), /Herdr monitoring/); component.handleInput(" ");
+  down(); assert.match(render(), /Herdr viewers/); component.handleInput(" ");
+  down(); assert.match(render(), /tmux monitoring/); component.handleInput(" ");
+  down(); assert.match(render(), /tmux viewers/); component.handleInput(" ");
+  component.handleInput("\x1b");
+  await running;
+  const saved = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.deepEqual(saved.subagent.herdr, { enabled: false, viewers: false, futureKey: "kept" });
+  assert.deepEqual(saved.subagent.tmux, { enabled: false, viewers: false });
+  assert.deepEqual(saved.subagent.modelTiers, { fast: "anthropic/haiku" });
+  assert.deepEqual(changes.map(([backend, next]) => [backend, next.enabled, next.viewers]), [
+    ["herdr", false, true], ["herdr", false, false], ["tmux", false, true], ["tmux", false, false],
+  ]);
 });
 
 test("/subagents reports that RPC/print modes cannot host its terminal dialog", async () => {

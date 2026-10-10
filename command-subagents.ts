@@ -14,8 +14,9 @@
  *
  * Every change is applied through core.ts's applyTierConfigChange and
  * persisted immediately via jobs.ts's writeModelTiers (settings.json is
- * re-read per subagent tool call, so changes take effect at once). Herdr switches
- * persist independently via mux-settings.ts before notifying the entry controller.
+ * re-read per subagent tool call, so changes take effect at once). Herdr and
+ * tmux switches persist independently via mux-settings.ts before notifying the
+ * entry controller.
  *
  * Depends on core.ts (pure), jobs.ts and mux-settings.ts (settings IO), not monitoring.
  */
@@ -193,15 +194,25 @@ class ModelPickerComponent extends Container {
 const AUTO_ID = "auto";
 const HERDR_ENABLED_ID = "herdr-enabled";
 const HERDR_VIEWERS_ID = "herdr-viewers";
+const TMUX_ENABLED_ID = "tmux-enabled";
+const TMUX_VIEWERS_ID = "tmux-viewers";
+// Row -> (backend, option) map. Every row writes exactly one key of one backend;
+// the write path preserves its sibling backend and unknown keys.
+const MUX_ROWS: ReadonlyArray<{ id: string; backend: "herdr" | "tmux"; option: "enabled" | "viewers" }> = [
+	{ id: HERDR_ENABLED_ID, backend: "herdr", option: "enabled" },
+	{ id: HERDR_VIEWERS_ID, backend: "herdr", option: "viewers" },
+	{ id: TMUX_ENABLED_ID, backend: "tmux", option: "enabled" },
+	{ id: TMUX_VIEWERS_ID, backend: "tmux", option: "viewers" },
+];
 const MENU_VISIBLE_ROWS = 10;
 const isTierId = (id: string): id is TierLevel => (TIER_LEVELS as readonly string[]).includes(id);
 
-async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (next: MuxOptions) => void): Promise<void> {
+async function runDialog(ctx: ExtensionCommandContext, onMuxOptionsChange?: (next: MuxOptions, backend: "herdr" | "tmux") => void): Promise<void> {
 	const ui = ctx.ui;
 	const modelContext = buildModelContext(ctx);
 	let config = modelContext.tierConfig;
 	const settingsPath = path.join(getAgentDir(), "settings.json");
-	let herdr = readMuxSettings(settingsPath).herdr;
+	let mux = readMuxSettings(settingsPath);
 	const options = catalogOptions(ctx);
 
 	const explicitTiers = () => TIER_LEVELS.filter((l) => config?.[l]).map((l) => `${l}: ${config?.[l]}`);
@@ -215,7 +226,7 @@ async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (n
 		// kept in sync by intercepting main-menu up/down with the same wrap semantics.
 		let selectedIndex = 0;
 		let submenuOpen = false;
-		const rowIds = () => [AUTO_ID, ...(config?.auto === true ? [] : TIER_LEVELS), HERDR_ENABLED_ID, HERDR_VIEWERS_ID];
+		const rowIds = () => [AUTO_ID, ...(config?.auto === true ? [] : TIER_LEVELS), ...MUX_ROWS.map((row) => row.id)];
 		const itemCount = () => rowIds().length;
 		const selectedId = () => rowIds()[selectedIndex];
 
@@ -283,21 +294,34 @@ async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (n
 						}))),
 				{
 					id: HERDR_ENABLED_ID, label: "Herdr monitoring",
-					currentValue: herdr.enabled ? "on" : "off", values: ["on", "off"],
+					currentValue: mux.herdr.enabled ? "on" : "off", values: ["on", "off"],
 					description: "Display subagent activity in Herdr; only active inside a Herdr session",
 				},
 				{
 					id: HERDR_VIEWERS_ID, label: "Herdr viewers",
-					currentValue: herdr.viewers ? "on" : "off", values: ["on", "off"],
-					description: herdr.enabled
+					currentValue: mux.herdr.viewers ? "on" : "off", values: ["on", "off"],
+					description: mux.herdr.enabled
 						? "Show live traces in owned viewer panes; disabling viewers leaves monitoring active"
 						: "Inactive while Herdr monitoring is disabled; the viewer preference is retained",
 				},
+				{
+					id: TMUX_ENABLED_ID, label: "tmux monitoring",
+					currentValue: mux.tmux.enabled ? "on" : "off", values: ["on", "off"],
+					description: "Display subagent activity in tmux; only active inside a tmux session",
+				},
+				{
+					id: TMUX_VIEWERS_ID, label: "tmux viewers",
+					currentValue: mux.tmux.viewers ? "on" : "off", values: ["on", "off"],
+					description: mux.tmux.enabled
+						? "Show live traces in owned viewer panes; disabling viewers leaves monitoring active"
+						: "Inactive while tmux monitoring is disabled; the viewer preference is retained",
+				},
 			];
 			return new SettingsList(items, MENU_VISIBLE_ROWS, getSettingsListTheme(), (id, value) => {
-				if (id === HERDR_ENABLED_ID || id === HERDR_VIEWERS_ID) {
-					const next = { ...herdr, [id === HERDR_ENABLED_ID ? "enabled" : "viewers"]: value === "on" };
-					const result = writeMuxOptions(settingsPath, "herdr", next);
+				const muxRow = MUX_ROWS.find((row) => row.id === id);
+				if (muxRow) {
+					const next = { ...mux[muxRow.backend], [muxRow.option]: value === "on" };
+					const result = writeMuxOptions(settingsPath, muxRow.backend, next);
 					if (!result.ok) {
 						ui.notify(`Could not save settings: ${result.error}`, "error");
 						// SettingsList mutates its row before calling us; restore active values.
@@ -305,9 +329,9 @@ async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (n
 						done(true);
 						return;
 					}
-					herdr = next;
-					try { onHerdrOptionsChange?.(next); }
-					catch { ui.notify("Herdr monitoring could not apply saved settings.", "warning"); }
+					mux = { ...mux, [muxRow.backend]: next };
+					try { onMuxOptionsChange?.(next, muxRow.backend); }
+					catch { ui.notify("Monitoring could not apply saved settings.", "warning"); }
 					rebuildMenu();
 					tui.requestRender();
 					return;
@@ -387,15 +411,15 @@ async function runDialog(ctx: ExtensionCommandContext, onHerdrOptionsChange?: (n
 // ── Registration ─────────────────────────────────────────────────────────────
 
 /** Register the `/subagents` settings command. */
-export function registerSubagentsCommand(pi: ExtensionAPI, onHerdrOptionsChange?: (next: MuxOptions) => void): void {
+export function registerSubagentsCommand(pi: ExtensionAPI, onMuxOptionsChange?: (next: MuxOptions, backend: "herdr" | "tmux") => void): void {
 	pi.registerCommand("subagents", {
-		description: "Subagent settings (model tiers + Herdr monitoring and viewers)",
+		description: "Subagent settings (model tiers + Herdr/tmux monitoring and viewers)",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") {
 				process.stderr.write("/subagents requires TUI mode; its settings dialog is terminal-only.\n");
 				return;
 			}
-			await runDialog(ctx, onHerdrOptionsChange);
+			await runDialog(ctx, onMuxOptionsChange);
 		},
 	});
 }

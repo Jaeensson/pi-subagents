@@ -39,7 +39,7 @@ export interface MonitorDeps {
   warn: (message: string) => void;
   viewerFactory?: (host: ViewerHost) => ViewerManager;
 }
-export interface HerdrMonitor {
+export interface MuxMonitor {
   start(sessionId: string, cwd: string, settings: MuxSettings): void;
   applyOptions(settings: MuxSettings): void;
   stop(): Promise<void> | undefined;
@@ -71,7 +71,7 @@ const stripTerminalControls = (value: string): string => value
 const displayWarning = (message: string): string => stripTerminalControls(`Herdr monitoring unavailable: ${message}`).slice(0, 80);
 const displayJobId = (id: string): string => stripTerminalControls(id).trim().slice(0, 48) || "unknown";
 
-export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
+export function createMuxMonitor(deps: MonitorDeps): MuxMonitor {
   const { clock } = deps;
   let binding: { sessionId: string; cwd: string; settings: MuxSettings } | undefined;
   let cached: { context: MuxContext; adapter: MuxAdapter } | undefined;
@@ -241,9 +241,11 @@ export function createHerdrMonitor(deps: MonitorDeps): HerdrMonitor {
       const detected = deps.detect(deps.env);
       const current = detected ? binding.settings[detected.context.backend] : undefined;
       const next = detected ? settings[detected.context.backend] : undefined;
+      // Refresh the binding before any early return so a later detection flip
+      // reads the sibling backend's current options, never a stale clone.
+      binding.settings = cloneSettings(settings);
       if (current && next && current.enabled === next.enabled && current.viewers === next.viewers) return;
       void stop();
-      binding.settings = cloneSettings(settings);
       activate();
     },
     stop,

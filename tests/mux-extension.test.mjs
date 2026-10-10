@@ -21,7 +21,7 @@ codingAgent.initTheme();
 const { default: extension } = await import("../index.ts");
 const { jobs, clearRegistry, getJobsRoot, waitForJob } = await import("../runtime.ts");
 const { spawnTask, shutdownTaskProcesses, resumeTaskSpawning } = await import("../process.ts");
-const { createHerdrMonitor } = await import("../mux-monitor.ts");
+const { createMuxMonitor } = await import("../mux-monitor.ts");
 const { createHerdrAdapter } = await import("../herdr-adapter.ts");
 const { createViewerManager } = await import("../mux-viewers.ts");
 const { readManifest, writeManifest } = await import("../store.ts");
@@ -133,7 +133,7 @@ function composition({ holdFirstReport = false, viewers = false } = {}) {
   let deps, factories = 0, adapters = 0, viewerCreated = false, viewerRunning = false, disposed = 0, nextLookup;
   const h = harness(received => {
     factories++; deps = received;
-    const monitor = createHerdrMonitor({ ...received, env, clock: time,
+    const monitor = createMuxMonitor({ ...received, env, clock: time,
       adapterFactory(context) {
         adapters++;
         return createHerdrAdapter(context, async (_binary, args, options) => {
@@ -325,6 +325,46 @@ test("production default-on outside Herdr creates no CLI calls, viewer files, or
     assert.equal(existsSync(log), false);
     assert.deepEqual(directories(), before);
   } finally { globalThis.setTimeout = oldTimeout; globalThis.setInterval = oldInterval; process.env.PATH = previousPath; }
+});
+
+// Break caught: index dispatch sending a tmux environment to the Herdr adapter,
+// activating tmux while disabled, or leaking timers/viewers on a failed initial lookup.
+test("tmux environment reaches the injected adapter factory as backend tmux, and disabled or failed tmux stays inert", async () => {
+  const bin = path.join(home, "tmux-bin"), log = path.join(home, "tmux-cli");
+  mkdirSync(bin, { recursive: true });
+  const fake = path.join(bin, "pi-fake-tmux");
+  writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexit 1\n`, { mode: 0o755 });
+  const tmuxEnv = { TMUX: "/tmp/t,1,0", TMUX_PANE: "%9", PI_TMUX_BIN: fake };
+  const time = clock(), observed = [];
+  let viewerCalls = 0;
+  const build = received => createMuxMonitor({ ...received, env: tmuxEnv, clock: time,
+    adapterFactory(context) { observed.push(context); return received.adapterFactory(context); },
+    viewerFactory() { viewerCalls++; return { reconcile() {}, stop: async () => {} }; },
+  });
+  try {
+    // Disabled tmux: detection resolves, but activation allocates nothing.
+    save({ subagent: { tmux: { enabled: false, viewers: true } } });
+    const disabled = harness(build);
+    await disabled.start(); await flush();
+    assert.deepEqual(observed, [], "disabled tmux never reaches the adapter factory");
+    assert.equal(viewerCalls, 0, "disabled tmux never creates viewers");
+    assert.equal(time.timers.size, 0, "disabled tmux never creates timers");
+    assert.equal(existsSync(log), false, "disabled tmux issues no commands");
+    await disabled.shutdown();
+
+    // Enabled tmux: the injected factory receives backend tmux and the real dispatch reaches the tmux CLI.
+    save({ subagent: { tmux: { enabled: true, viewers: true } } });
+    const enabled = harness(build);
+    await enabled.start();
+    await until(() => existsSync(log));
+    await flush();
+    assert.equal(observed.length, 1, "enabled tmux activates through the adapter factory");
+    assert.equal(observed[0].backend, "tmux", "the injected factory receives backend tmux");
+    assert.match(readFileSync(log, "utf8"), /^-S \/tmp\/t /m, "index dispatch selected the tmux adapter");
+    assert.equal(viewerCalls, 0, "a failed initial lookup never creates viewers");
+    assert.equal(time.timers.size, 0, "a failed initial lookup never creates timers");
+    await enabled.shutdown();
+  } finally { await shutdownTaskProcesses(5, 100); }
 });
 
 // Break caught: awaiting stop before the durable/child sweep, or clearing registry instead of reaping owned children.

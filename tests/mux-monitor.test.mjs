@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHerdrMonitor } from "../mux-monitor.ts";
+import { createMuxMonitor } from "../mux-monitor.ts";
 import { createHerdrAdapter } from "../herdr-adapter.ts";
+import { createTmuxAdapter } from "../tmux-adapter.ts";
 import { detectMux } from "../mux-detection.ts";
 import { checkJobComplete, emptyUsage, setMessageSender, subscribeRuntimeObservations } from "../runtime.ts";
 import { emptyLiveTrace } from "../live.ts";
@@ -62,7 +63,7 @@ function harness(overrides = {}) {
     },
   };
   if (overrides.noViewerFactory) delete deps.viewerFactory;
-  const monitor = createHerdrMonitor(deps);
+  const monitor = createMuxMonitor(deps);
   return {
     monitor, clock, calls, warnings, hosts, reconciles, listeners,
     get factoryCalls() { return factoryCalls; }, get adapterCalls() { return adapterCalls; }, get viewerStops() { return viewerStops; },
@@ -150,6 +151,17 @@ test("missing or malformed startup query fails once without refresh or status-tr
     assert.equal(h.calls.length, 1); assert.equal(h.warnings.length, 1); assert.equal(h.factoryCalls, 0); assert.equal(h.clock.timers.size, 0);
     await stop(h);
   }
+});
+
+test("tmux below-floor initial lookup fails once, bounded, with no timers or viewers", async () => {
+  const tmuxEnv = { TMUX: "/tmp/t,1,0", TMUX_PANE: "%9" };
+  const h = harness({ env: tmuxEnv, tasks: [task("t")],
+    adapterFactory: context => createTmuxAdapter(context, async () => "tmux 3.1\n") });
+  h.monitor.start("session", "/cwd", enabled); await flush();
+  h.emit({ type: "status" }); h.clock.advance(60_000); await flush();
+  assert.equal(h.warnings.length, 1); assert.ok(h.warnings[0].length <= 80);
+  assert.equal(h.clock.timers.size, 0); assert.equal(h.factoryCalls, 0); assert.equal(h.reports.length, 0);
+  await stop(h);
 });
 
 test("CLI error warnings cannot relay terminal escapes, controls or unbounded display text", async () => {
@@ -330,6 +342,23 @@ test("notification display IDs are bounded and stripped of terminal controls", a
   }
   assert.match(h.notifications[0].args[2], /bad-id$/);
   assert.equal(h.notifications[1].args[2].length, 75);
+  await stop(h);
+});
+
+test("applyOptions refreshes sibling backend settings before the unchanged early return", async () => {
+  const flipEnv = { HERDR_ENV: "1", HERDR_PANE_ID: "original", HERDR_SOCKET_PATH: "/socket", HERDR_BIN_PATH: "/herdr" };
+  const h = harness({ env: flipEnv, tasks: [task("t")] });
+  const original = settings({ enabled: true, viewers: false });
+  h.monitor.start("session", "/cwd", original); await flush();
+  assert.equal(h.adapterCalls, 1);
+  // Detected backend unchanged, sibling changed: still store the fresh clone.
+  const updated = { herdr: { enabled: true, viewers: false }, tmux: { enabled: true, viewers: true } };
+  h.monitor.applyOptions(updated); await flush();
+  assert.equal(h.adapterCalls, 1, "an unchanged detected backend does not restart");
+  // A later detection flip must compare against the refreshed sibling, not a stale clone.
+  delete flipEnv.HERDR_ENV; flipEnv.TMUX = "/tmp/t,1,0"; flipEnv.TMUX_PANE = "%9";
+  h.monitor.applyOptions(updated); await flush();
+  assert.equal(h.adapterCalls, 1, "detection flip reads the refreshed sibling options");
   await stop(h);
 });
 

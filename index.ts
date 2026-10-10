@@ -33,8 +33,9 @@
 import path from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHerdrAdapter } from "./herdr-adapter.ts";
+import { createTmuxAdapter } from "./tmux-adapter.ts";
 import { detectMux } from "./mux-detection.ts";
-import { createHerdrMonitor, nodeMonitorClock, type HerdrMonitor } from "./mux-monitor.ts";
+import { createMuxMonitor, nodeMonitorClock, type MuxMonitor } from "./mux-monitor.ts";
 import { readMuxSettings } from "./mux-settings.ts";
 import { createViewerManager } from "./mux-viewers.ts";
 import { beginTaskShutdown, markInterruptedSweep, resumeTaskSpawning, shutdownTaskProcesses } from "./process.ts";
@@ -65,11 +66,11 @@ import { subagentTool } from "./tools/subagent.ts";
 // Set when the extension loads; used by async completion notifications.
 let api: ExtensionAPI;
 
-export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof createHerdrMonitor } = {}) {
+export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof createMuxMonitor } = {}) {
 	api = pi;
 	let boundSessionId: string | undefined;
 	let monitorStartupGeneration = 0;
-	let monitor: HerdrMonitor | undefined;
+	let monitor: MuxMonitor | undefined;
 	// Never relay external CLI diagnostics to JSON stdout or terminal controls.
 	const warn = (message: string) => {
 		const safe = message.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
@@ -79,14 +80,14 @@ export default function (pi: ExtensionAPI, ports: { createMonitor?: typeof creat
 	// One idle controller owns sequencing and the shared raw adapter across starts.
 	// Construction must not activate commands, subscriptions, files, or timers.
 	try {
-		monitor = (ports.createMonitor ?? createHerdrMonitor)({
+		monitor = (ports.createMonitor ?? createMuxMonitor)({
 			env: process.env,
 			getTasks: () => boundSessionId === undefined ? [] : [...tasks.values()].filter(
 				(task) => jobs.get(task.jobId)?.parentSessionId === boundSessionId,
 			),
 			subscribe: subscribeRuntimeObservations,
 			detect: detectMux,
-			adapterFactory: createHerdrAdapter,
+			adapterFactory: (ctx) => ctx.backend === "tmux" ? createTmuxAdapter(ctx) : createHerdrAdapter(ctx),
 			clock: nodeMonitorClock,
 			viewerFactory: createViewerManager,
 			warn,

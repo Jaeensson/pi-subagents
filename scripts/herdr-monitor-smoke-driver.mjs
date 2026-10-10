@@ -39,7 +39,7 @@ export async function runSmokeDriver() {
   assert.equal(sdk.getAgentDir(), path.join(root, "agent"));
   sdk.initTheme();
   const { default: extension } = await import("../index.ts");
-  const { createHerdrMonitor, nodeMonitorClock } = await import("../mux-monitor.ts");
+  const { createMuxMonitor, nodeMonitorClock } = await import("../mux-monitor.ts");
   const { createViewerManager } = await import("../mux-viewers.ts");
   const { createSnapshotStore } = await import("../mux-files.ts");
   const { spawnTask } = await import("../process.ts");
@@ -71,7 +71,7 @@ export async function runSmokeDriver() {
   extension({
     on: (name, fn) => hooks.set(name, fn), registerTool() {}, registerMessageRenderer() {},
     registerCommand: (_name, value) => { command = value; }, sendMessage: (...args) => messages.push(args),
-  }, { createMonitor: deps => createHerdrMonitor({ ...deps, clock,
+  }, { createMonitor: deps => createMuxMonitor({ ...deps, clock,
     adapterFactory: context => {
       monitorCommands++;
       return deps.adapterFactory(context, async (_binary, args, options) => {
