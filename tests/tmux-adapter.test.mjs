@@ -296,6 +296,93 @@ test("createTab creates a detached window and reports its root pane", async () =
   assert.deepEqual(calls[0], ["-S", "/tmp/t", "new-window", "-d", "-t", "$0:", "-c", "/work", "-n", "Subagents", "-P", "-F", "#{window_id} #{pane_id}"]);
 });
 
+test("createTab scopes border chrome and disables automatic rename", async () => {
+  const calls = [];
+  const adapter = withVersion(calls, "@7 %8");
+  await adapter.createTab("$0", "/work");
+  const argv = calls.map(c => c.join(" "));
+  assert.ok(argv.some(a => a.includes("set-option -w -t @7 pane-border-status top")));
+  assert.ok(argv.some(a => a.includes("set-option -w -t @7 pane-border-format  #{@pi_viewer_summary} ")));
+  assert.ok(argv.some(a => a.includes("set-option -w -t @7 automatic-rename off")));
+  assert.ok(!argv.some(a => a.includes("set-option -g")), "chrome must never mutate global options");
+});
+
+// Resolves the parent caller pane to %1/@4 while answering new-window with the
+// owned window @7, so the owned-window chrome is distinguishable from the parent's.
+const withOwnedWindow = calls => createTmuxAdapter(context, async (_binary, args) => {
+  if (args.includes("-V")) return "tmux 3.7c";
+  calls.push(args);
+  if (args.includes("new-window")) return "@7 %8";
+  if (args.includes("display-message")) return "%1 @4 $0";
+  return "";
+});
+
+test("metadata renames the owned window to the escaped aggregate summary", async () => {
+  const calls = [];
+  const adapter = withOwnedWindow(calls);
+  await adapter.createTab("$0", "/work");
+  calls.length = 0;
+  await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "2 running" } });
+  const argv = calls.map(c => c.join(" "));
+  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 Subagents · 2 running"), "renames the owned window, not the parent's @4");
+});
+
+test("clearing the summary renames the owned window back to Subagents", async () => {
+  const calls = [];
+  const adapter = withOwnedWindow(calls);
+  await adapter.createTab("$0", "/work");
+  await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "2 running" } });
+  calls.length = 0;
+  await adapter.metadata("%1", { source: "s", seq: "2", tokens: { subagent_summary: null } });
+  const argv = calls.map(c => c.join(" "));
+  assert.ok(argv.includes("-S /tmp/t rename-window -t @7 Subagents"), "restores the plain window name");
+});
+
+test("the owned window name is escaped and bounded without a dangling hash", async () => {
+  const calls = [];
+  const adapter = withOwnedWindow(calls);
+  await adapter.createTab("$0", "/work");
+  calls.length = 0;
+  await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "#(x)" + "y".repeat(60) } });
+  const rename = calls.map(c => c.join(" ")).find(a => a.includes("rename-window"));
+  assert.ok(rename, "renames the owned window");
+  const name = rename.split("rename-window -t @7 ")[1];
+  assert.ok(name.startsWith("Subagents · "), `unexpected name ${name}`);
+  assert.ok(name.length <= 40, `name is bounded, got ${name.length}`);
+  assert.ok(name.includes("##(x)"), "escapes the hash before bounding");
+  assert.equal((name.match(/#/g) ?? []).length % 2, 0, "never leaves half of an escaped hash");
+});
+
+test("a failed owned-window rename does not fail the metadata report", async () => {
+  const adapter = createTmuxAdapter(context, async (_binary, args) => {
+    if (args.includes("-V")) return "tmux 3.7c";
+    if (args.includes("new-window")) return "@7 %8";
+    if (args.includes("display-message")) return "%1 @4 $0";
+    if (args.includes("rename-window")) throw Object.assign(new Error("can't find window: @7"), { stderr: "can't find window: @7" });
+    return "";
+  });
+  await adapter.createTab("$0", "/work");
+  const result = await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "2 running" } });
+  assert.equal(result.ok, true, "title chrome is best effort");
+});
+
+test("metadata without an owned window never renames any window", async () => {
+  const calls = [];
+  const adapter = withPane(calls);
+  await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "2 running" } });
+  assert.ok(!calls.map(c => c.join(" ")).some(a => a.includes("rename-window")));
+});
+
+test("closeTab clears the tracked owned window so later summaries do not rename it", async () => {
+  const calls = [];
+  const adapter = withOwnedWindow(calls);
+  await adapter.createTab("$0", "/work");
+  await adapter.closeTab("@7");
+  calls.length = 0;
+  await adapter.metadata("%1", { source: "s", seq: "1", tokens: { subagent_summary: "2 running" } });
+  assert.ok(!calls.map(c => c.join(" ")).some(a => a.includes("rename-window")), "stale owned window must not be renamed");
+});
+
 test("splitPane detaches in the requested direction and resolves the pane triple", async () => {
   const calls = [];
   const adapter = createTmuxAdapter(context, async (_binary, args) => {

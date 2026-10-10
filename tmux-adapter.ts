@@ -42,6 +42,23 @@ export function escapeFormatValue(value: string): string {
   return value.replace(/[\x00-\x1F\x7F-\x9F]/g, "").replace(/#/g, "##");
 }
 
+// The owned window's title echoes the escaped aggregate summary after a marker
+// prefix, bounded so the tmux window list stays readable. Bounding the escaped
+// string can land between the two hashes of an escaped `#`, so drop a dangling
+// half before it renders as a broken format token.
+const OWNED_WINDOW_PREFIX = "Subagents · ";
+const OWNED_WINDOW_MAX = 40;
+const PARENT_WINDOW_NAME = "Subagents";
+const BORDER_FORMAT = " #{@pi_viewer_summary} ";
+
+export function boundedWindowName(summary: string): string {
+  const escaped = escapeFormatValue(summary);
+  const budget = OWNED_WINDOW_MAX - OWNED_WINDOW_PREFIX.length;
+  let body = escaped.slice(0, budget);
+  if (body.endsWith("#") && !body.endsWith("##")) body = body.slice(0, -1);
+  return `${OWNED_WINDOW_PREFIX}${body}`;
+}
+
 export interface TmuxClock {
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
@@ -87,6 +104,10 @@ export function createTmuxAdapter(
   const queue = createCommandQueue();
   const staleError = () => Object.assign(new Error("scope is stale"), { stale: true });
   let probe: Promise<ProbeResult> | undefined;
+  // The single owned window this adapter created. It is adapter-scoped (shared
+  // by every scoped view) so the parent's metadata report can rename it, and it
+  // is cleared by closeTab so no later summary renames a window that is gone.
+  let ownedWindowId: string | undefined;
   // One scheduled TTL unset per target pane, shared across scopes: every later
   // patch or explicit clear for that pane cancels the previous timer, so no
   // timer outlives the report it belongs to. tmux options never expire on their
@@ -145,6 +166,14 @@ export function createTmuxAdapter(
       try { return success(await fn()); } catch (error: any) { return errorResult(error); }
     };
     const queryPane = async (id: string): Promise<PaneRef> => paneRefFromText(await invoke(["display-message", "-p", "-t", id, PANE_FORMAT]));
+    // Window title chrome is decoration: a closed owned window must not fail the
+    // aggregate report. Keying on the window serializes the rename with
+    // closeTab, so a window closed first is never renamed afterwards.
+    const renameOwned = async (name: string): Promise<void> => {
+      const target = ownedWindowId;
+      if (target === undefined) return;
+      try { await invoke(["rename-window", "-t", target, name], target); } catch { /* best effort */ }
+    };
     return {
       currentPane: async (id) => {
         const state = await ready(); if (!state.ok) return state;
@@ -166,9 +195,18 @@ export function createTmuxAdapter(
       createTab: async (workspaceId, cwd) => {
         const state = await ready(); if (!state.ok) return state;
         return wrap(async () => {
-          const output = await invoke(["new-window", "-d", "-t", `${workspaceId}:`, "-c", cwd, "-n", "Subagents", "-P", "-F", "#{window_id} #{pane_id}"]);
+          const output = await invoke(["new-window", "-d", "-t", `${workspaceId}:`, "-c", cwd, "-n", PARENT_WINDOW_NAME, "-P", "-F", "#{window_id} #{pane_id}"]);
           const parts = output.trim().split(/\s+/).filter(Boolean);
           if (parts.length !== 2 || !TAB_ID.test(parts[0]) || !PANE_ID.test(parts[1])) throw new TypeError("invalid tmux window creation response");
+          // Ownership is recorded as soon as the window exists, even if the
+          // chrome below fails or the scope goes stale; the window is real.
+          ownedWindowId = parts[0];
+          // All chrome is window-scoped: never mutate a global tmux option.
+          await runCommands([
+            ["set-option", "-w", "-t", ownedWindowId, "pane-border-status", "top"],
+            ["set-option", "-w", "-t", ownedWindowId, "pane-border-format", BORDER_FORMAT],
+            ["set-option", "-w", "-t", ownedWindowId, "automatic-rename", "off"],
+          ], ownedWindowId);
           return { tabId: parts[0], rootPane: { paneId: parts[1], tabId: parts[0], workspaceId } };
         });
       },
@@ -208,11 +246,13 @@ export function createTmuxAdapter(
               await invoke(["set-option", "-pu", "-t", id, "@pi_subagent_summary"], id);
               const windowId = (await queryPane(id)).tabId;
               await invoke(["set-option", "-wu", "-t", windowId, "@pi_subagents"], id);
+              await renameOwned(PARENT_WINDOW_NAME);
             } else {
               const escaped = escapeFormatValue(value);
               await invoke(["set-option", "-p", "-t", id, "@pi_subagent_summary", escaped], id);
               const windowId = (await queryPane(id)).tabId;
               await invoke(["set-option", "-w", "-t", windowId, "@pi_subagents", escaped], id);
+              await renameOwned(boundedWindowName(value));
               if (isCurrent() && patch.ttlMs !== undefined) scheduleTtl(id, windowId, patch.ttlMs);
             }
           }
@@ -261,7 +301,14 @@ export function createTmuxAdapter(
       },
       closeTab: async id => {
         const state = await ready(); if (!state.ok) return state;
-        return wrap(async () => { await invoke(["kill-window", "-t", id], id); return undefined; });
+        return wrap(async () => {
+          // Relinquish ownership on any explicit close of the tracked window,
+          // even if the kill fails, so no later summary renames a window this
+          // adapter no longer controls.
+          if (ownedWindowId === id) ownedWindowId = undefined;
+          await invoke(["kill-window", "-t", id], id);
+          return undefined;
+        });
       },
       scoped: scope => make(() => isCurrent() && scope()),
     };
