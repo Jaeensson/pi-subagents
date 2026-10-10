@@ -395,6 +395,55 @@ test("layout never splits an owned viewer after it moves into a destination tab"
   h.manager.reconcile([task("a"), task("b")], h.parent); await flush(); assert.equal(commands(h, "split").length, 0); await h.manager.stop();
 });
 
+test("a transiently unknown anchor defers layout, then splits later without a second owned tab", async () => {
+  const h = harness(); h.occupants.set("p0", []); // tmux still reports its own command before the shell execs.
+  h.manager.reconcile([task("a"), task("b"), task("c"), task("d")], h.parent); await flush();
+  assert.deepEqual(h.counts(), { tabs: 1, splits: 0 }); assert.equal(commands(h, "run").length, 0);
+  assert.equal(h.calls.some(c => c.warning), false); // deferred, not disabled
+  h.occupants.set("p0", [{ pid: 7, name: "bash" }]);
+  await h.time.advance(250); await flush(); await h.time.advance(250);
+  assert.deepEqual(h.counts(), { tabs: 1, splits: 3 }); assert.equal(commands(h, "create").length, 1);
+  assert.equal(commands(h, "run").length, 4); assert.equal(commands(h, "report-agent").length, 4);
+  await h.manager.stop();
+});
+
+test("an unlaunched slot with a transiently unknown inspection defers, then launches once the shell appears", async () => {
+  const h = harness(); h.occupants.set("p0", [{ pid: 7, name: "tmux" }]);
+  h.manager.reconcile([task("t")], h.parent); await flush();
+  assert.deepEqual(h.counts(), { tabs: 1, splits: 0 }); assert.equal(commands(h, "run").length, 0);
+  assert.equal(h.calls.some(c => c.warning), false); // deferred, not disabled
+  await h.time.advance(1000); // repeated ticks keep deferring without guessing a launch
+  assert.equal(commands(h, "run").length, 0); assert.equal(commands(h, "close").length, 0);
+  h.occupants.set("p0", [{ pid: 7, name: "bash" }]);
+  await h.time.advance(500);
+  assert.equal(commands(h, "run").length, 1); assert.equal(commands(h, "report-agent").length, 1);
+  await h.manager.stop();
+});
+
+test("authoritative missing and foreign inspections still disable instead of deferring", async () => {
+  // Missing before launch: the pane vanished, so the attempt is relinquished and retried on a fresh tab.
+  let once = false;
+  const missing = harness({ onCommand: async args => { if (!once && args[1] === "current") { once = true; missing.panes.delete("p0"); } } });
+  missing.manager.reconcile([task("t")], missing.parent); await flush(); await missing.time.advance(250);
+  assert.ok(missing.calls.some(c => c.warning));
+  assert.equal(commands(missing, "run").length, 1); // retried once, never into the missing pane
+  assert.ok(commands(missing, "run").every(c => c.args[2] !== "p0"));
+  assert.deepEqual(missing.counts(), { tabs: 2, splits: 0 });
+  await missing.manager.stop();
+  // Foreign after launch: a user program replaced the viewer, so the pane is relinquished.
+  const foreign = harness(), t = task("t");
+  foreign.manager.reconcile([t], foreign.parent); await flush();
+  assert.equal(commands(foreign, "run").length, 1);
+  foreign.occupants.set("p0", [{ pid: 900, name: "editor" }]);
+  t.status = "completed";
+  foreign.manager.reconcile([t, task("new")], foreign.parent); await foreign.time.advance(250); await flush();
+  assert.ok(foreign.calls.some(c => c.warning));
+  assert.equal(commands(foreign, "run").length, 2); // relaunched on a fresh tab
+  assert.ok(commands(foreign, "run").filter(c => c.args[2] === "p0").length <= 1);
+  assert.deepEqual(foreign.counts(), { tabs: 2, splits: 0 });
+  await foreign.manager.stop();
+});
+
 test("Node resolver prefers real parent Node and searches executable Node only for Bun/standalone", async () => {
   assert.equal(await resolveViewerNode(process.execPath, { PATH: "" }, process.platform), process.execPath);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "node-discovery-"));

@@ -232,13 +232,18 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
     const port = api.scoped(check);
     const inspection = await inspect(slot, port, check); guard(check);
     if (slot.launched) {
+      // A transiently unknown pane (tmux still reports its own command before the
+      // shell execs) is deferrable; retry on the next service tick without disabling.
+      if (inspection.kind === "unknown") return;
       if (inspection.kind !== "owned") { unavailable(slot, "viewer ownership unavailable", inspection); return; }
       slot.phase = "ready";
       await publish(slot, epoch); guard(check);
       await report(slot, epoch); guard(check);
       return;
     }
-    if (inspection.kind !== "shell") { unavailable(slot, "unsupported or unknown viewer shell", inspection); return; }
+    // Same transient deferral before launch: only authoritative absence disables.
+    if (inspection.kind === "unknown") return;
+    if (inspection.kind !== "shell") { unavailable(slot, "unsupported or missing viewer shell", inspection); return; }
     slot.store ??= deps.storeFactory();
     slot.paths ??= await slot.store.openSlot(slot.identity); guard(check);
     // Write the first current task before launching; publication failures never launch a reader.
@@ -303,8 +308,12 @@ export function createViewerManager(host: ViewerHost, supplied: Partial<ViewerMa
           const created = await port.splitPane(anchor.paneId, slot.index === 1 ? "right" : "down", host.cwd);
           if (!created.ok) { if (active()) unavailable(slot, "viewer split unavailable"); continue; }
           pane = created.value;
+        } else if (unknownAnchor) {
+          // A transiently unknown candidate (tmux still reports its own command before
+          // the shell execs) may become a safe anchor; leave the slot reserved for the
+          // next layout tick. Never disable it and never create a second owned tab here.
+          continue;
         } else {
-          if (unknownAnchor) { unavailable(slot, "viewer layout ownership unavailable"); continue; }
           // No safe anchor remains (e.g. the sole pane was relinquished).
           // Only a fresh authoritative creation may establish a new owned tab.
           const created = await port.createTab(parent.workspaceId, host.cwd);
