@@ -1,6 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
-import { VIEWER_CONTAINER_LABEL, type MuxContext, type PaneRef } from "./mux-core.ts";
+import { VIEWER_CONTAINER_LABEL, runningCount, type MuxContext, type PaneRef } from "./mux-core.ts";
 import { createCommandQueue } from "./mux-adapter.ts";
 import type { ApiResult, MuxAdapter, ViewerLaunch } from "./mux-adapter.ts";
 
@@ -42,24 +42,14 @@ export function escapeFormatValue(value: string): string {
   return value.replace(/[\x00-\x1F\x7F-\x9F]/g, "").replace(/#/g, "##");
 }
 
-// The owned window's title echoes the escaped aggregate summary after a marker
-// prefix, bounded so the tmux window list stays readable. Bounding the escaped
-// string can land between the two hashes of an escaped `#`, so drop a dangling
-// half before it renders as a broken format token.
-const OWNED_WINDOW_PREFIX = `${VIEWER_CONTAINER_LABEL} · `;
-const OWNED_WINDOW_MAX = 40;
 const PARENT_WINDOW_NAME = VIEWER_CONTAINER_LABEL;
 const BORDER_FORMAT = " #{@pi_viewer_summary} ";
 
-export function boundedWindowName(summary: string): string {
-  const escaped = escapeFormatValue(summary);
-  // A blank summary has no body: keep the plain window name so the title never
-  // renders a dangling " · " separator.
-  if (escaped.trim() === "") return PARENT_WINDOW_NAME;
-  const budget = OWNED_WINDOW_MAX - OWNED_WINDOW_PREFIX.length;
-  let body = escaped.slice(0, budget);
-  body = body.replace(/#+$/, run => (run.length % 2 ? run.slice(0, -1) : run));
-  return `${OWNED_WINDOW_PREFIX}${body}`;
+// The owned window's title shows only how many tasks are running. It holds the
+// fixed label and digits, never summary text, so it needs no format escaping.
+function ownedWindowName(summary: string): string {
+  const running = runningCount(summary);
+  return running ? `${PARENT_WINDOW_NAME} (${running})` : PARENT_WINDOW_NAME;
 }
 
 export interface TmuxClock {
@@ -261,7 +251,7 @@ export function createTmuxAdapter(
               await invoke(["set-option", "-p", "-t", id, "@pi_subagent_summary", escaped], id);
               const windowId = (await queryPane(id)).tabId;
               await invoke(["set-option", "-w", "-t", windowId, "@pi_subagents", escaped], id);
-              await renameOwned(boundedWindowName(value));
+              await renameOwned(ownedWindowName(value));
               if (isCurrent() && patch.ttlMs !== undefined) scheduleTtl(id, windowId, patch.ttlMs);
             }
           }

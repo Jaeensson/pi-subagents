@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  attemptKey, summarizeTasks, formatSummary, projectSnapshot,
+  attemptKey, summarizeTasks, formatSummary, runningCount, projectSnapshot,
   encodeSnapshot, chooseSlot, SNAPSHOT_MAX_BYTES,
 } from "../mux-core.ts";
 
@@ -31,6 +31,19 @@ test("summaries include setup work and slot choice protects executing slots", ()
     { index: 2, phase: "ready", taskStatus: "paused", availableSince: 0 },
     { index: 3, phase: "ready", taskStatus: "paused", availableSince: 10 },
   ]), { kind: "reuse", index: 2 });
+});
+
+test("runningCount reads back the running count formatSummary wrote", () => {
+  for (const executing of [0, 1, 2, 12]) {
+    const counts = { executing, queued: 3, paused: 1, completed: 4, unsuccessful: 5 };
+    assert.equal(runningCount(formatSummary(counts)), executing);
+  }
+});
+
+test("runningCount returns undefined when no count can be read", () => {
+  for (const summary of ["", "   ", "2 running", "#(x)", "running", "running x · queued 1", "queued 1 · running 2", "running 99999999999999999999"]) {
+    assert.equal(runningCount(summary), undefined, `parsed ${JSON.stringify(summary)}`);
+  }
 });
 
 test("oldest ready slot precedes empty panes and status never overrides age", () => {

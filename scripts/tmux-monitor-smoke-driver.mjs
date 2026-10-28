@@ -102,7 +102,7 @@ export async function runSmokeDriver() {
     const out = await cli(["list-windows", "-a", "-F", "#{window_id} #{window_name}"]);
     return out.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean)
       .map(line => { const [id, ...name] = line.split(/\s+/); return { id, name: name.join(" ") }; })
-      .find(entry => entry.name === "π subagents" || entry.name.startsWith("π subagents · "));
+      .find(entry => entry.name === "π subagents" || /^π subagents \(\d+\)$/.test(entry.name));
   };
   try {
     await start();
