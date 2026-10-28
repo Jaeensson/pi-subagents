@@ -118,7 +118,7 @@ export async function runSmoke(supplied = {}) {
     const windows = (await invoke(["list-windows", "-a", "-F", "#{window_id} #{window_name}"]))
       .trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean)
       .map(line => { const [id, ...name] = line.split(/\s+/); return { id, name: name.join(" ") }; });
-    const owned = windows.find(w => w.name === "π subagents" || w.name.startsWith("π subagents · "));
+    const owned = windows.find(w => w.name === "π subagents" || /^π subagents \(\d+\)$/.test(w.name));
     if (!owned) throw new Error(`no π subagents window: ${windows.map(w => w.name).join(" | ")}`);
     const panes = (await invoke(["list-panes", "-t", owned.id, "-F", "#{pane_id}"])).trim().split(/\s+/).filter(Boolean);
     if (panes.length !== 4) throw new Error(`expected four viewer panes, saw ${panes.length}`);

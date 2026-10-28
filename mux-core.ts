@@ -53,6 +53,15 @@ export function formatSummary(counts: TaskCounts): string {
   return `running ${counts.executing} · queued ${counts.queued} · paused ${counts.paused} · completed ${counts.completed} · unsuccessful ${counts.unsuccessful}`;
 }
 
+// Reads the running count back out of a formatSummary string; undefined when
+// the summary does not lead with a readable count.
+export function runningCount(summary: string): number | undefined {
+  const match = /^running (\d+)(?= ·|$)/.exec(summary);
+  if (!match) return undefined;
+  const count = Number(match[1]);
+  return Number.isSafeInteger(count) ? count : undefined;
+}
+
 const cleanText = (value: string): string => value
   .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g, "")
   .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")

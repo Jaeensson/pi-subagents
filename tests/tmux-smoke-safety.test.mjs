@@ -65,7 +65,7 @@ async function fixture(t, { noBinary = false, driverFailure = false, changedName
       assert.fail(`unexpected display-message format ${format} for ${target}`);
     }
     if (command[0] === "capture-pane") return driverFailure ? "TMUX_SMOKE_FAILED:fixture failure\n" : `${OK_MARKER}\n`;
-    if (command[0] === "list-windows") return `@1 smoke\n@7 ${changedName ? "Renamed" : "π subagents · running 4 · queued 0"}\n`;
+    if (command[0] === "list-windows") return `@1 smoke\n@7 ${changedName ? "Renamed" : "π subagents (4)"}\n`;
     if (command[0] === "list-panes") return "%1\n%2\n%3\n%4\n";
     if (command[0] === "show-options") {
       if (command.includes("pane-border-status")) return "top\n";
