@@ -86,7 +86,10 @@ test("the tasks description names the ceiling the tool actually enforces", async
 	// maximum the schema does not declare.
 	const tasks = JSON.parse(JSON.stringify(subagentTool.parameters)).properties.tasks;
 	assert.equal(tasks.maxItems, undefined, "the schema declares no maximum on tasks, so validation cannot be what rejects a ninth task");
-	assert.doesNotMatch(tasks.description, /\bmax(?:imum)?\b\s*\(?\s*\d+/i, "the description may not claim a schema maximum the schema does not declare");
+	// Wording-agnostic on purpose: while no maxItems is declared there is no schema
+	// maximum to claim, so any use of "max"/"maximum" is a promise the schema
+	// does not keep — including a parenthetical that restates the ceiling as one.
+	assert.doesNotMatch(tasks.description, /\bmax(?:imum)?\b/i, "no maximum is declared on tasks, so the description must not claim one");
 
 	const named = /at most (\d+) parallel tasks/i.exec(tasks.description);
 	assert.ok(named, "the description must name the parallel ceiling a caller actually hits");
