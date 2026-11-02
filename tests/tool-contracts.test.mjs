@@ -18,8 +18,11 @@ const context = {
 	scopedModels: [],
 	modelRegistry: { getAvailable: () => [] },
 };
+// pi 1.5.0's wrapRegisteredTool resolves each call's context through
+// runner.createToolContext(toolCallId, signal) instead of runner.createContext(),
+// so the stand-in must supply that factory or the wrapper throws before the tool runs.
 function hostWrapped(tool) {
-	return wrapRegisteredTool({ definition: tool }, { createContext: () => context });
+	return wrapRegisteredTool({ definition: tool }, { createToolContext: () => context });
 }
 function run(tool, params) {
 	return hostWrapped(tool).execute("tool-call", params, undefined, undefined, undefined);
