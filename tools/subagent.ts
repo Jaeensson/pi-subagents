@@ -77,7 +77,7 @@ const subagentParams = Type.Object({
 	}),
 	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke. Omit for a raw prompt using the built-in default agent." })),
 	task: Type.Optional(Type.String({ description: "Task to delegate, or the raw prompt when no agent is given" })),
-	tasks: Type.Optional(Type.Array(TaskItem, { minItems: 1, description: "Non-empty array of {agent?, task} for parallel execution (max 8); omit agent for a raw prompt using the built-in default agent" })),
+	tasks: Type.Optional(Type.Array(TaskItem, { minItems: 1, description: `Non-empty array of {agent?, task} for parallel execution: the tool runs at most ${MAX_PARALLEL_TASKS} parallel tasks per call and refuses a larger batch itself (argument validation does not apply this ceiling), so split bigger batches across multiple subagent calls; omit agent for a raw prompt using the built-in default agent` })),
 	chain: Type.Optional(Type.Array(ChainItem, { minItems: 1, description: "Non-empty array of {agent?, task} for sequential execution; use {previous} in a task to reference the prior output; omit agent for a raw prompt using the built-in default agent" })),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	tier: singleTierParam,

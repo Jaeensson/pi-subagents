@@ -133,13 +133,21 @@ test("host validator rejects the shapes the tools document as invalid", () => {
 });
 
 test("the parallel ceiling is enforced by the tool, not by the schema", () => {
-	// Measured on this tree: `tasks` carries minItems but no maxItems, so nine
-	// parallel tasks pass the host's validation. The nine-task ceiling is the
-	// MAX_PARALLEL_TASKS guard in the subagent tool, and the contract suite's
-	// "parallel arrays above the supported limit reject before any spawn" is the
-	// test that pins the rejection a user actually gets.
-	const nine = { mode: "parallel", tasks: Array.from({ length: 9 }, (_, i) => ({ task: `task ${i}` })) };
-	const result = hostValidators.subagent.parse(nine);
-	assert.equal(result.ok, true);
-	assert.equal(result.value.tasks.length, 9);
+	// Measured on this tree: `tasks` carries minItems but no maxItems, so both
+	// eight and nine parallel tasks pass the host's validation. The eight-task
+	// ceiling is the MAX_PARALLEL_TASKS guard in the subagent tool, and the
+	// contract suite's "parallel arrays above the supported limit reject before
+	// any spawn" is the test that pins the rejection a user actually gets, while
+	// "the tasks description names the ceiling the tool actually enforces" pins
+	// the schema description to that same guard rather than to a declared
+	// maxItems.
+	const schema = JSON.parse(JSON.stringify(subagentTool.parameters));
+	assert.equal(schema.properties.tasks.maxItems, undefined, "the tasks array declares no maximum, so validation cannot be the enforcing layer");
+	assert.equal(schema.properties.tasks.minItems, 1, "the tasks array still declares its minimum");
+
+	for (const count of [8, 9]) {
+		const parsed = hostValidators.subagent.parse({ mode: "parallel", tasks: Array.from({ length: count }, (_, i) => ({ task: `task ${i}` })) });
+		assert.equal(parsed.ok, true, `${count} parallel tasks must pass the host validator`);
+		assert.equal(parsed.value.tasks.length, count);
+	}
 });
