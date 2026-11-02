@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { removeTempRoot } from "./support/temp-root.mjs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -26,7 +27,7 @@ test("output artifact is readable and private under durable sidecars directory",
 		assert.equal(readOutputArtifact(artifact.path), "😀 full output\nline two");
 		assert.equal(readOutputArtifact(path.join(taskDir, "missing.txt")), undefined);
 		assert.ok(artifact.path.startsWith(taskDir));
-	} finally { rmSync(root, { recursive: true, force: true }); }
+	} finally { removeTempRoot(root); }
 });
 
 test("preview notifications remain one compact line when truncated", () => {
@@ -60,7 +61,7 @@ test("single, chain/parallel-style reports, and multi-job collection share aggre
 		const collected = collectResultText(["job-0", "job-1", "job-2", "job-3"]);
 		assert.ok(Buffer.byteLength(collected.text) <= DEFAULT_OUTPUT_CAP_BYTES);
 		assert.ok(collected.text.split("\n").length <= MAX_OUTPUT_LINES);
-	} finally { clearRegistry(); rmSync(root, { recursive: true, force: true }); }
+	} finally { clearRegistry(); removeTempRoot(root); }
 });
 
 test("collection after reload reads persisted rows and returns the artifact path", async () => {
@@ -81,7 +82,7 @@ test("collection after reload reads persisted rows and returns the artifact path
 		assert.ok(collected.text.includes(artifact.path));
 		assert.equal(readFileSync(artifact.path, "utf8"), "full persisted output");
 	} finally {
-		clearRegistry(); setJobsRoot(undefined); setParentSessionId(undefined); rmSync(root, { recursive: true, force: true });
+		clearRegistry(); setJobsRoot(undefined); setParentSessionId(undefined); removeTempRoot(root);
 	}
 });
 

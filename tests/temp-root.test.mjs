@@ -3,66 +3,107 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { removeTempRoot } from "./support/temp-root.mjs";
 
 const raceError = (code = "ENOTEMPTY") => Object.assign(new Error(`${code}: directory not empty`), { code });
+const noWait = { retryDelayMs: 0 };
 
-test("removing a temp root retries only a transient race and gives up after a bounded number of attempts", () => {
-	// A removal that hits the race twice, then succeeds: the tree is gone and the
-	// retries stopped as soon as the walk was clean.
-	let racingCalls = 0;
+test("a teardown that loses the removal race retries and then succeeds", () => {
+	let calls = 0;
 	removeTempRoot("/tmp/unused-root", {
 		rm: () => {
-			racingCalls++;
-			if (racingCalls < 3) throw raceError();
+			calls++;
+			if (calls < 3) throw raceError();
 		},
-		retryDelayMs: 0,
+		...noWait,
 	});
-	assert.equal(racingCalls, 3, "the removal retried while the race persisted and stopped once it succeeded");
+	assert.equal(calls, 3, "the removal retried while the race persisted and stopped once it succeeded");
+});
 
-	// EBUSY is the other transient race the filesystem reports for a teardown.
-	let busyCalls = 0;
+test("a busy tree is retried like an empty-directory race", () => {
+	let calls = 0;
 	removeTempRoot("/tmp/unused-root", {
 		rm: () => {
-			busyCalls++;
-			if (busyCalls < 2) throw raceError("EBUSY");
+			calls++;
+			if (calls < 2) throw raceError("EBUSY");
 		},
-		retryDelayMs: 0,
+		...noWait,
 	});
-	assert.equal(busyCalls, 2, "a busy tree is retried too");
+	assert.equal(calls, 2, "EBUSY is a transient race too, so it is retried");
+});
 
-	// A teardown that can never succeed must not be swallowed: it stops at the
-	// bound and rethrows the race error.
-	let boundedCalls = 0;
+test("a non-race removal error is rethrown on the first attempt", () => {
+	let calls = 0;
 	assert.throws(
 		() =>
 			removeTempRoot("/tmp/unused-root", {
 				rm: () => {
-					boundedCalls++;
-					throw raceError();
-				},
-				retryDelayMs: 0,
-			}),
-		(error) => error.code === "ENOTEMPTY",
-		"a teardown that keeps racing fails loudly instead of retrying forever",
-	);
-	assert.equal(boundedCalls, 10, "the default bound is ten attempts");
-
-	// Anything that is not a race is rethrown at once: a broken teardown stays visible.
-	let failedCalls = 0;
-	assert.throws(
-		() =>
-			removeTempRoot("/tmp/unused-root", {
-				rm: () => {
-					failedCalls++;
+					calls++;
 					throw raceError("EACCES");
 				},
-				retryDelayMs: 0,
+				...noWait,
 			}),
 		(error) => error.code === "EACCES",
-		"a non-race error is not retried",
+		"a broken teardown stays visible instead of being retried away",
 	);
-	assert.equal(failedCalls, 1, "a non-race error is rethrown on the first attempt");
+	assert.equal(calls, 1, "a non-race error is not retried");
+});
+
+test("a teardown that keeps losing the race stops at the bound and rethrows", () => {
+	let calls = 0;
+	assert.throws(
+		() =>
+			removeTempRoot("/tmp/unused-root", {
+				rm: () => {
+					calls++;
+					throw raceError();
+				},
+				...noWait,
+			}),
+		(error) => error.code === "ENOTEMPTY",
+		"a cleanup that can never succeed fails loudly instead of retrying forever",
+	);
+	assert.equal(calls, 10, "the default bound is ten attempts");
+});
+
+test("the retries wait between attempts, with the default delay", () => {
+	const sleeps = [];
+	let calls = 0;
+	assert.throws(
+		() =>
+			removeTempRoot("/tmp/unused-root", {
+				rm: () => {
+					calls++;
+					throw raceError();
+				},
+				sleep: (ms) => sleeps.push(ms),
+			}),
+		(error) => error.code === "ENOTEMPTY",
+	);
+	assert.equal(calls, 10, "ten attempts");
+	assert.deepEqual(sleeps, Array(9).fill(25), "nine waits of the default 25 ms, none after the last attempt");
+});
+
+test("a nonsense attempt count still removes the tree once and reports a real error", () => {
+	let calls = 0;
+	for (const attempts of [0, -1, Number.NaN]) {
+		calls = 0;
+		assert.throws(
+			() =>
+				removeTempRoot("/tmp/unused-root", {
+					rm: () => {
+						calls++;
+						throw raceError();
+					},
+					attempts,
+					...noWait,
+				}),
+			(error) => error?.code === "ENOTEMPTY",
+			`attempts: ${attempts} still reports the failure it saw`,
+		);
+		assert.equal(calls, 1, `attempts: ${attempts} still attempts the removal once`);
+	}
 });
 
 test("removing a real temp root takes the whole tree with it", () => {
@@ -71,4 +112,25 @@ test("removing a real temp root takes the whole tree with it", () => {
 	fs.writeFileSync(path.join(root, "parent-session", "job", "manifest.json"), "{}");
 	removeTempRoot(root);
 	assert.equal(fs.existsSync(root), false, "the root is gone");
+});
+
+test("every suite that writes through the durable store removes its temp roots through the helper", () => {
+	// A suite that sets a jobs root writes through the durable store, whose
+	// transactions can still be queued when its teardown runs. A raw removal there
+	// can lose that race, so those suites must use removeTempRoot — this keeps the
+	// conversion from drifting back one call site at a time.
+	const testsDir = path.dirname(fileURLToPath(import.meta.url));
+	const helper = path.join(testsDir, "support", "temp-root.mjs");
+	const rawRemoval = /\brmSync\s*\(|\.promises\.rm\s*\(|\bfs\.rm\s*\(|\brm\s*\(/;
+	const offenders = [];
+	for (const file of fs.readdirSync(testsDir, { recursive: true, encoding: "utf8" })) {
+		if (!file.endsWith(".mjs")) continue;
+		const full = path.join(testsDir, file);
+		if (full === helper) continue;
+		const source = fs.readFileSync(full, "utf8");
+		if (!source.includes("setJobsRoot(")) continue;
+		if (rawRemoval.test(source)) offenders.push(file);
+	}
+	assert.deepEqual(offenders, [], "suites that write through the durable store must remove temp roots with removeTempRoot");
+	assert.equal(fs.readFileSync(helper, "utf8").includes("const TRANSIENT_RACE_ERRORS"), true, "the helper is the one place that holds the retry policy");
 });
