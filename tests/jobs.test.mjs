@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { removeTempRoot } from "./support/temp-root.mjs";
 import { collectResultText, persistChainSteps, resumeJob, runChainFrom } from "../jobs.ts";
 import { pauseJobTasks } from "../process.ts";
 import { writeOutputArtifact } from "../output.ts";
@@ -131,10 +132,10 @@ test("truncated multi-task collection points to a combined report containing eve
 		assert.ok(report.includes(`${path.join(root, "combined-task-1-output.txt")}`));
 		assert.ok(report.includes(`${path.join(root, "combined-task-2-output.txt")}`));
 		assert.ok(text.includes(reportPath));
-		fs.rmSync(path.dirname(reportPath), { recursive: true, force: true });
+		removeTempRoot(path.dirname(reportPath));
 	} finally {
 		jobs.delete(jobId);
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -210,7 +211,7 @@ test("three-step chain pauses and resumes the same step repeatedly, then advance
 		assert.equal(job.tasks.map((task) => task.step).join(","), "1,2,3");
 		assert.equal(job.tasks[2].task, "third based on new step output");
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -252,7 +253,7 @@ test("fresh chain passes full oversized artifact output and persists final statu
 		assert.equal(persisted.tasks[0].outputBytes, Buffer.byteLength(output));
 		assert.equal(fs.readFileSync(persisted.tasks[0].outputPath, "utf8"), output);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -288,7 +289,7 @@ test("resumed fresh chain step reads full prior output artifact after reload", a
 		assert.equal(await waitForJob(resumedJobId), true);
 		assert.equal(readManifest(root, parentSessionId, resumedJobId).status, "completed");
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -307,7 +308,7 @@ test("a failed resumed chain step does not dispatch later steps", async () => {
 		assert.equal(children.length, 1);
 		assert.match(result.job.errorMessage, /resumed step 2/);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -359,7 +360,7 @@ test("resuming a paused parallel batch gives dispatch ownership only to the newe
 		assert.deepEqual([...counts.values()], [2, 2, 2, 2, 1, 1, 1, 1]);
 	} finally {
 		for (const child of children) if (child.proc.exitCode === null) finishChild(child, "cleanup");
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -377,7 +378,7 @@ test("same-process concurrent resume is admitted once without an existing regist
 		await until(() => children.length === 1);
 		assert.equal(children.length, 1);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });

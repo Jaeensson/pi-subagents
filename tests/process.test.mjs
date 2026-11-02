@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { removeTempRoot } from "./support/temp-root.mjs";
 import {
 	beginTaskShutdown,
 	holdTaskDispatch,
@@ -108,7 +109,7 @@ test("resolvePiInvocation finds the installed pi CLI rather than re-running a ha
 			command: "/opt/pi-standalone", args: ["-p"],
 		});
 	} finally {
-		fs.rmSync(binDir, { recursive: true, force: true });
+		removeTempRoot(binDir);
 	}
 });
 
@@ -139,7 +140,7 @@ test("shutdown captures process ownership before marking tasks interrupted and c
 		assert.equal(fs.existsSync(task.tmpPath), false);
 		assert.equal(fs.existsSync(tempDir), false);
 	} finally {
-		fs.rmSync(tempDir, { recursive: true, force: true });
+		removeTempRoot(tempDir);
 		cleanup();
 	}
 });
@@ -175,7 +176,7 @@ test("task manifest entry is flushed before the child process starts", async () 
 		);
 		assert.equal(sawFlushedTask, true);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -252,7 +253,7 @@ test("single job persists completed status before waitForJob settles, even when 
 		assert.equal(manifest.tasks[0].status, "completed");
 		assert.equal(job.tasks[0].finalizing, false);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -286,7 +287,7 @@ test("oversized Unicode output is private, exact, and persisted before task wait
 		assert.ok(task.messages.length <= 100);
 		assert.ok(Buffer.byteLength(task.messages.at(-1).content[0].text) < Buffer.byteLength(output));
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -325,7 +326,7 @@ test("resuming without a new assistant result preserves the existing full-output
 		assert.equal(task.outputPath, outputPath);
 		assert.equal(task.outputBytes, Buffer.byteLength(originalOutput));
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -349,7 +350,7 @@ test("overlapping parallel finalizations persist completed status with every fin
 		assert.equal(manifest.status, "completed");
 		assert.deepEqual(manifest.tasks.map((task) => task.status).sort(), ["completed", "completed"]);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -381,7 +382,7 @@ test("failed initial persistence falls back to an ephemeral child session", asyn
 		assert.equal(argsSeen.includes("--session-dir"), false);
 		assert.equal(fs.existsSync(path.join(root, psid, job.id)), false);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -463,7 +464,7 @@ test("single job pauses and resumes twice on the same task ID and transcript; a 
 		assert.equal(job.tasks[0].id, taskId);
 		assert.equal(job.tasks.length, 1);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -503,7 +504,7 @@ test("fresh parallel dispatch records all eight durable tasks before starting at
 		assert.equal(active, 0);
 	} finally {
 		release();
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -551,7 +552,7 @@ test("resumed parallel batch of eight is limited to four live child processes", 
 		assert.equal(peak, 4);
 		assert.equal(active, 0);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -579,7 +580,7 @@ test("pause and abort cancel queued parallel dispatch without losing resumable t
 		assert.equal(pausedManifest.tasks.filter((task) => task.status === "paused").length, 8);
 	} finally {
 		release();
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 
@@ -604,7 +605,7 @@ test("pause and abort cancel queued parallel dispatch without losing resumable t
 		assert.equal(spawnCalls, 0);
 	} finally {
 		releaseAbort();
-		fs.rmSync(abortRoot, { recursive: true, force: true });
+		removeTempRoot(abortRoot);
 		cleanup();
 		unsubscribe();
 	}
@@ -665,7 +666,7 @@ test("resuming an unstarted queued task replays its original prompt instead of a
 		assert.equal(spawnArgs.at(-1).includes("Continue"), false);
 		closeChild(child);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });
@@ -699,7 +700,7 @@ test("resume is blocked while final task persistence is unsettled", async () => 
 		fs.unlinkSync(lockPath);
 		await waitUntil(() => task.finalizing === false);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		cleanup();
 	}
 });

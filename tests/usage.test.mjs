@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { removeTempRoot } from "./support/temp-root.mjs";
 import { setJobsRoot, setParentSessionId } from "../runtime.ts";
 import { readManifest, writeManifest, updateManifest, upsertManifestTask } from "../store.ts";
 import { reportTaskUsage } from "../usage.ts";
@@ -72,7 +73,7 @@ test("running collection persists totals so resumed usage reports only its new d
 		assert.ok(Math.abs(increment.cost.total - 0.2) < 1e-10);
 		assert.deepEqual(readManifest(root, "parent-session", "running-job").tasks[0].usage, resumed.usage);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 	}
 });
 
@@ -102,7 +103,7 @@ test("usage arriving during a delayed manifest write remains available for the n
 		assert.equal(later.input, 5);
 		assert.equal(later.output, 1);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 	}
 });
 
@@ -136,6 +137,6 @@ test("durable usage claims survive restored task objects and preserve later resu
 		assert.deepEqual(readManifest(root, "parent-session", "job-1").tasks[0].reportedUsage, resumed.usage);
 		assert.equal((await reportTaskUsage([resumed])).totalTokens, 0);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 	}
 });

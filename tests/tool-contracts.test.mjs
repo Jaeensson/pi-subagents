@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { removeTempRoot } from "./support/temp-root.mjs";
 import { wrapRegisteredTool } from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
 import { subagentTool } from "../tools/subagent.ts";
@@ -149,7 +150,7 @@ test("disk-only subagent_wait restores final output and claims persisted usage o
 		const second = await run(subagentWaitTool, { jobIds: [jobId] });
 		assert.equal(second.usage.totalTokens, 0);
 	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempRoot(root);
 		setJobsRoot(undefined);
 		setParentSessionId(undefined);
 	}
