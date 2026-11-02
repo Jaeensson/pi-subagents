@@ -111,3 +111,7 @@ npm run typecheck # tsc --noEmit (uses nix-store symlinks in node_modules/)
   install via `pi install git:git@github.com:Jaeensson/pi-subagents`.
 - Reload pi (`/reload`) after changes; the extension is loaded at session
   start.
+- The devshell's `node_modules` links point at the pi that nixpkgs provides
+  (see `flake.nix`), so they can lag `package.json`; a devshell typecheck
+  against an older pi is not evidence about the pinned version. Aligning the
+  flake is a follow-up.
