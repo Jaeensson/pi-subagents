@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { compile } from "@earendil-works/pi-schema";
+import { formats } from "@earendil-works/pi-schema/formats";
 import { Check } from "typebox/value";
 import { subagentTool } from "../tools/subagent.ts";
 import { subagentAgentsTool } from "../tools/subagent-agents.ts";
@@ -47,17 +48,24 @@ test("flattened subagent schema still rejects invalid combos", () => {
 // loosely typed input, so TypeBox's Check no longer describes what a user
 // experiences. The assertions above still describe the schema shape providers
 // see; the ones below state the same contract through the validator the host
-// actually runs, compiled with the same `coerce: true` the host uses.
+// actually runs, compiled with the host's own options (its getValidator:
+// `{ formats, coerce: true, unresolvedRefs: "reject" }`).
 
 const hostValidators = {
-	subagent: compile(subagentTool.parameters, { coerce: true }),
-	subagent_wait: compile(subagentWaitTool.parameters, { coerce: true }),
-	subagent_status: compile(subagentStatusTool.parameters, { coerce: true }),
-	subagent_pause: compile(subagentPauseTool.parameters, { coerce: true }),
-	subagent_resume: compile(subagentResumeTool.parameters, { coerce: true }),
-	subagent_agents: compile(subagentAgentsTool.parameters, { coerce: true }),
+	subagent: compile(subagentTool.parameters, { formats, coerce: true, unresolvedRefs: "reject" }),
+	subagent_wait: compile(subagentWaitTool.parameters, { formats, coerce: true, unresolvedRefs: "reject" }),
+	subagent_status: compile(subagentStatusTool.parameters, { formats, coerce: true, unresolvedRefs: "reject" }),
+	subagent_pause: compile(subagentPauseTool.parameters, { formats, coerce: true, unresolvedRefs: "reject" }),
+	subagent_resume: compile(subagentResumeTool.parameters, { formats, coerce: true, unresolvedRefs: "reject" }),
+	subagent_agents: compile(subagentAgentsTool.parameters, { formats, coerce: true, unresolvedRefs: "reject" }),
 };
 
+// Acceptance alone is not evidence of coercion: for a value that needs none, a
+// validator that echoed its input would satisfy `deepEqual(result.value, value)`
+// just as well (the coercer returns the same value by identity). The weight is
+// carried by the sibling coercion test below, which cannot pass without real
+// coercion — a non-coercing validator rejects `wait: "true"`, and `assert.equal`
+// is strict, so `"true"` fails against `true`.
 test("host validator accepts the documented shape of every tool", () => {
 	const accepted = {
 		subagent: [
