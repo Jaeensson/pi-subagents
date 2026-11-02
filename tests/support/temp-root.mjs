@@ -13,7 +13,7 @@ import * as fs from "node:fs";
  *
  * They are queued, not in flight, because nothing awaits them. `waitForTask`
  * returns on the status `finalizeTask` sets at process.ts:308, before that
- * function's persist at :337 (runtime.ts:352 returns as soon as `isDone()`), and
+ * function's persist at :337 (runtime.ts:353 returns as soon as `isDone()`), and
  * the writers themselves are unawaited `void`ed calls: process.ts:278
  * (`cancelQueuedTask`), :522 (the `launch()` path inside `spawnTask`), :628 and
  * :632 (the close and error handlers) and :636 (the spawn catch). :643 is the
@@ -28,22 +28,20 @@ import * as fs from "node:fs";
  * Node's own `maxRetries`/`retryDelay` do not recover from that. On Node 22.19
  * (the leg that failed; Node 26 delegates `rmSync` to the native `binding.rmSync`)
  * `_rmdirSync` in `lib/internal/fs/rimraf.js` re-reads a directory once after
- * ENOTEMPTY, removes what it read, and then retries only the terminal `rmdirSync`.
- * An entry that lands between that re-read and the retry is never read again, and
- * the retries keep rejecting the same non-empty directory. Re-running the whole
- * removal re-reads the tree and takes the stray entry with it.
+ * ENOTEMPTY, removes what it read, and then calls only the terminal `rmdirSync`.
+ * `rmSync` passes `maxRetries` 0, so that is a single attempt, not a loop of
+ * retries; an entry that lands between the re-read and that attempt is never
+ * read again. Re-running the whole removal re-reads the tree and takes the stray
+ * entry with it.
  *
  * Only race-shaped filesystem errors are retried; anything else is rethrown at
  * once, and the whole removal is bounded so a teardown that can never succeed
  * still fails loudly.
  *
- * Excluded suites: `mux-extension.test.mjs` does spawn children whose close
- * handlers call `void finalizeTask`, but it cannot race — every child close is
- * followed by an awaited `waitForJob`, and shutdown marks tasks interrupted
- * durably before reaping, so `finalizeTask` returns at its status guard
- * (process.ts:304) and no transaction is pending at its teardown. Every other
- * suite that removes a temp root never calls `setJobsRoot`, so no durable write
- * exists for it to race.
+ * Every suite that enters the durable-store path — it calls `setJobsRoot(`, or it
+ * imports the extension entry (`../index.ts`) and so can start the tasks that
+ * write manifests — removes its temp roots through this helper, and a test pins
+ * that sweep. Suites outside that path have no durable write to race.
  */
 
 const TRANSIENT_RACE_ERRORS = new Set(["ENOTEMPTY", "EBUSY"]);
@@ -56,8 +54,9 @@ function sleepSync(ms) {
 }
 
 export function removeTempRoot(dir, { rm = fs.rmSync, sleep = sleepSync, attempts = DEFAULT_ATTEMPTS, retryDelayMs = DEFAULT_RETRY_DELAY_MS } = {}) {
-	// A teardown must always attempt at least one removal, however the caller
-	// spells the bound; otherwise there is no error to report.
+	// Only a finite number of at least one keeps its value; `Infinity`, strings and
+	// `NaN` mean one attempt, so a teardown always either removes the tree or
+	// throws the error it saw.
 	const tries = Number.isFinite(attempts) && attempts >= 1 ? Math.floor(attempts) : 1;
 	let lastError;
 	for (let attempt = 1; attempt <= tries; attempt++) {

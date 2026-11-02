@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { removeTempRoot } from "./support/temp-root.mjs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -324,4 +325,4 @@ test("task status changes register the widget and make ctrl-alt-s open the watch
   }
 });
 
-test.after(() => rmSync(home, { recursive: true, force: true }));
+test.after(() => removeTempRoot(home));

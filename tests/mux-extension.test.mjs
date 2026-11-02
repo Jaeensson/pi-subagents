@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { removeTempRoot } from "./support/temp-root.mjs";
 
 const home = mkdtempSync(path.join(os.tmpdir(), "subagent-herdr-entry-"));
 process.env.HOME = home;
@@ -472,4 +473,4 @@ test("entry settings callback closes real viewer pool while central monitoring a
   } finally { await h.shutdown(); }
 });
 
-test.after(() => rmSync(home, { recursive: true, force: true }));
+test.after(() => removeTempRoot(home));

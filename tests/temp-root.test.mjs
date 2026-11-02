@@ -86,9 +86,8 @@ test("the retries wait between attempts, with the default delay", () => {
 });
 
 test("a nonsense attempt count still removes the tree once and reports a real error", () => {
-	let calls = 0;
-	for (const attempts of [0, -1, Number.NaN]) {
-		calls = 0;
+	for (const attempts of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "3"]) {
+		let calls = 0;
 		assert.throws(
 			() =>
 				removeTempRoot("/tmp/unused-root", {
@@ -100,10 +99,26 @@ test("a nonsense attempt count still removes the tree once and reports a real er
 					...noWait,
 				}),
 			(error) => error?.code === "ENOTEMPTY",
-			`attempts: ${attempts} still reports the failure it saw`,
+			`attempts: ${String(attempts)} still reports the failure it saw`,
 		);
-		assert.equal(calls, 1, `attempts: ${attempts} still attempts the removal once`);
+		assert.equal(calls, 1, `attempts: ${String(attempts)} still attempts the removal once`);
 	}
+});
+
+test("a real retry waits before its second attempt", () => {
+	// No injected sleep here: the default clock must actually pass, so a no-op
+	// sleep cannot survive this test.
+	const started = Date.now();
+	let calls = 0;
+	removeTempRoot("/tmp/unused-root", {
+		rm: () => {
+			calls++;
+			if (calls < 2) throw raceError();
+		},
+	});
+	const elapsed = Date.now() - started;
+	assert.equal(calls, 2, "it retried once");
+	assert.ok(elapsed >= 15, `the retry waited for the default delay (waited ${elapsed}ms)`);
 });
 
 test("removing a real temp root takes the whole tree with it", () => {
@@ -114,23 +129,33 @@ test("removing a real temp root takes the whole tree with it", () => {
 	assert.equal(fs.existsSync(root), false, "the root is gone");
 });
 
-test("every suite that writes through the durable store removes its temp roots through the helper", () => {
-	// A suite that sets a jobs root writes through the durable store, whose
-	// transactions can still be queued when its teardown runs. A raw removal there
-	// can lose that race, so those suites must use removeTempRoot — this keeps the
-	// conversion from drifting back one call site at a time.
-	const testsDir = path.dirname(fileURLToPath(import.meta.url));
+test("every suite that enters the durable-store path removes its temp roots through the helper", () => {
+	// A suite enters the store path when it sets a jobs root (writes manifests
+	// itself) or imports the extension entry (and so can start the tasks that
+	// write them). A raw removal there can lose the race described in the helper,
+	// so those suites must use removeTempRoot — this keeps the sweep from drifting
+	// back one call site at a time.
+	const guard = fileURLToPath(import.meta.url);
+	const testsDir = path.dirname(guard);
 	const helper = path.join(testsDir, "support", "temp-root.mjs");
+	const entersStorePath = (source) => source.includes("setJobsRoot(") || /from\s+"\.\.\/index\.ts"|import\(\s*"\.\.\/index\.ts"\s*\)/.test(source);
 	const rawRemoval = /\brmSync\s*\(|\.promises\.rm\s*\(|\bfs\.rm\s*\(|\brm\s*\(/;
 	const offenders = [];
+	let swept = 0;
 	for (const file of fs.readdirSync(testsDir, { recursive: true, encoding: "utf8" })) {
 		if (!file.endsWith(".mjs")) continue;
 		const full = path.join(testsDir, file);
-		if (full === helper) continue;
+		if (full === helper || full === guard) continue;
 		const source = fs.readFileSync(full, "utf8");
-		if (!source.includes("setJobsRoot(")) continue;
+		if (!entersStorePath(source)) continue;
+		swept++;
 		if (rawRemoval.test(source)) offenders.push(file);
 	}
-	assert.deepEqual(offenders, [], "suites that write through the durable store must remove temp roots with removeTempRoot");
-	assert.equal(fs.readFileSync(helper, "utf8").includes("const TRANSIENT_RACE_ERRORS"), true, "the helper is the one place that holds the retry policy");
+	assert.deepEqual(offenders, [], "suites that enter the durable-store path must remove temp roots with removeTempRoot");
+	assert.ok(swept >= 7, `the sweep looked at every store-entering suite (found ${swept})`);
+	assert.match(
+		fs.readFileSync(helper, "utf8"),
+		/const TRANSIENT_RACE_ERRORS = new Set\(\["ENOTEMPTY", "EBUSY"\]\)/,
+		"the helper itself defines which removal errors are retried",
+	);
 });
