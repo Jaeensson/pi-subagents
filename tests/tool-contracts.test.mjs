@@ -78,6 +78,45 @@ test("parallel arrays above the supported limit reject before any spawn", async 
 	await assert.rejects(run(subagentTool, { mode: "parallel", tasks }), /Too many parallel tasks/);
 });
 
+test("the tasks description names the ceiling the tool actually enforces", async () => {
+	// Ticket #3 direction: wording only. `tasks` declares minItems and no
+	// maxItems, so argument validation accepts any batch size; the
+	// MAX_PARALLEL_TASKS guard in subagent execute() is the enforcing layer, and
+	// the description must name that same ceiling instead of claiming a schema
+	// maximum the schema does not declare.
+	const tasks = JSON.parse(JSON.stringify(subagentTool.parameters)).properties.tasks;
+	assert.equal(tasks.maxItems, undefined, "the schema declares no maximum on tasks, so validation cannot be what rejects a ninth task");
+	// Wording-agnostic on purpose: while no maxItems is declared there is no schema
+	// maximum to claim, so any use of "max"/"maximum" is a promise the schema
+	// does not keep — including a parenthetical that restates the ceiling as one.
+	assert.doesNotMatch(tasks.description, /\bmax(?:imum)?\b/i, "no maximum is declared on tasks, so the description must not claim one");
+
+	const named = /at most (\d+) parallel tasks/i.exec(tasks.description);
+	assert.ok(named, "the description must name the parallel ceiling a caller actually hits");
+	const ceiling = Number(named[1]);
+
+	assert.equal(
+		Check(subagentTool.parameters, { mode: "parallel", tasks: Array.from({ length: ceiling }, (_, i) => ({ task: `task ${i}` })) }),
+		true,
+		"a call at the ceiling is accepted by validation",
+	);
+
+	// Above the ceiling, every task string is empty on purpose: if the guard is
+	// ever removed, this call still rejects on the per-item empty-task check
+	// instead of spawning nine children, so the mutation is observable without
+	// starting any process.
+	const above = Array.from({ length: ceiling + 1 }, () => ({ task: "" }));
+	const rejection = await run(subagentTool, { mode: "parallel", tasks: above }).then(() => null, (error) => error);
+	assert.ok(rejection instanceof Error, "a call above the ceiling must reject");
+	assert.match(rejection.message, /Too many parallel tasks/, "the rejection is the tool's own parallel-limit guard");
+	assert.match(rejection.message, new RegExp(`Max is ${ceiling}\\b`), "the guard states the same ceiling the description names");
+	assert.equal(
+		Check(subagentTool.parameters, { mode: "parallel", tasks: above }),
+		true,
+		"validation still accepts above the ceiling, so the rejection comes from the tool and not from the schema",
+	);
+});
+
 test("unknown job identifiers consistently reject from status, wait, pause, and resume", async () => {
 	await assert.rejects(run(subagentStatusTool, { jobIds: ["missing-status"] }), /Unknown job id/);
 	await assert.rejects(run(subagentWaitTool, { jobIds: ["missing-wait"] }), /Unknown job id/);
